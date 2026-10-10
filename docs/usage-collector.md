@@ -356,7 +356,7 @@ submissions *and* the keys first and raises rather than doing it.
 
 ## What the collector refuses and redacts on ingest
 
-`POST /findings` redacts recognisable secrets with engine patterns and `[redacted:<label>:<12 hex digits>]`; existing placeholders remain unchanged. Redacted fields: `source`; every finding and unverified result's title, target reference, evidence summary/detail and verdict rationale; every error's source, stage and reason; the missing items of every skipped rule. Ids, identity, rule ids, taxonomy, evaluator ids, run summary and declared deployment fields remain as sent (deployment fields are operator declarations; see the privacy guide).
+`POST /findings` redacts recognisable secrets with engine patterns and `[redacted:<label>:<12 hex digits>]`; a value reaching past a recognised key becomes one placeholder with it; placeholders the engine writes remain unchanged. Redacted fields: `source`; every finding and unverified result's title, target reference, evidence summary/detail and verdict rationale; every error's source, stage and reason; the missing items of every skipped rule. Ids, identity, rule ids, taxonomy, evaluator ids, run summary and declared deployment fields remain as sent (deployment fields are operator declarations; see the privacy guide).
 
 Post-redaction overflow (4,096 characters: `source`/error sources; 65,536: other text fields) returns `422`; nothing is stored.
 
@@ -444,7 +444,11 @@ credential on a command line lands in shell history, in `ps`, and in the echoed
 command of most CI logs — the same reason `probe` takes `--api-key-env` rather
 than `--api-key`. A collector that rejects a submission says so as a warning
 naming the status, because a whole fleet quietly failing to report while a
-dashboard shows stale data as current is the failure that matters.
+dashboard shows stale data as current is the failure that matters. What the
+collector says back, and why it could not be reached, is printed with that key
+withheld, recognisable secrets redacted and control characters dropped, so a
+collector that echoes the `Authorization` header cannot put the key in a CI log or
+rewrite the terminal.
 
 **`--reporter` takes the collector's URL, not a route.** The reporter appends the
 ingest path itself, so `server://https://collector.example.com` is the whole thing

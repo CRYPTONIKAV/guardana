@@ -527,7 +527,7 @@ tenant column on a database serving two teams folds their evidence into one
 undifferentiated pile, so the down migration counts the tenants across the
 submissions <em>and</em> the keys first and raises rather than doing it.</p>
 <h2 id="what-the-collector-refuses-and-redacts-on-ingest">What the collector refuses and redacts on ingest</h2>
-<p><code>POST /findings</code> redacts recognisable secrets with engine patterns and <code>[redacted:&lt;label&gt;:&lt;12 hex digits&gt;]</code>; existing placeholders remain unchanged. Redacted fields: <code>source</code>; every finding and unverified result's title, target reference, evidence summary/detail and verdict rationale; every error's source, stage and reason; the missing items of every skipped rule. Ids, identity, rule ids, taxonomy, evaluator ids, run summary and declared deployment fields remain as sent (deployment fields are operator declarations; see the privacy guide).</p>
+<p><code>POST /findings</code> redacts recognisable secrets with engine patterns and <code>[redacted:&lt;label&gt;:&lt;12 hex digits&gt;]</code>; a value reaching past a recognised key becomes one placeholder with it; placeholders the engine writes remain unchanged. Redacted fields: <code>source</code>; every finding and unverified result's title, target reference, evidence summary/detail and verdict rationale; every error's source, stage and reason; the missing items of every skipped rule. Ids, identity, rule ids, taxonomy, evaluator ids, run summary and declared deployment fields remain as sent (deployment fields are operator declarations; see the privacy guide).</p>
 <p>Post-redaction overflow (4,096 characters: <code>source</code>/error sources; 65,536: other text fields) returns <code>422</code>; nothing is stored.</p>
 <p>Across accepted envelope versions, published-schema violations return <code>422</code>, one error entry (<code>loc</code>, <code>msg</code>, <code>input</code>) per value: severity outside exact-case <code>INFO</code>/<code>LOW</code>/<code>MEDIUM</code>/<code>HIGH</code>/<code>CRITICAL</code>; verdict outcome outside <code>pass</code>/<code>fail</code>/<code>inconclusive</code>; confidence outside [0,1] or nonfinite; negative counts; negative/infinite wall time; gate outside <code>pass</code>/<code>fail</code>/<code>indeterminate</code>; evidence mode outside <code>metadata_only</code>/<code>redacted</code>/<code>full</code>; a skip reason outside <code>missing_capability</code>/<code>unsafe_mode</code>/<code>not_applicable</code>/<code>not_recorded</code>/<code>not_offered</code>; an identity that is present but not <code>sha256:</code> followed by 64 lower-case hex digits. Permitted <code>null</code> remains accepted.</p>
 <p>Data stored earlier reads back unchanged, including any secret it holds; redaction applies to new submissions. The dashboard never ranks an unknown severity as the worst.</p>
@@ -609,7 +609,11 @@ credential on a command line lands in shell history, in <code>ps</code>, and in 
 command of most CI logs — the same reason <code>probe</code> takes <code>--api-key-env</code> rather
 than <code>--api-key</code>. A collector that rejects a submission says so as a warning
 naming the status, because a whole fleet quietly failing to report while a
-dashboard shows stale data as current is the failure that matters.</p>
+dashboard shows stale data as current is the failure that matters. What the
+collector says back, and why it could not be reached, is printed with that key
+withheld, recognisable secrets redacted and control characters dropped, so a
+collector that echoes the <code>Authorization</code> header cannot put the key in a CI log or
+rewrite the terminal.</p>
 <p><strong><code>--reporter</code> takes the collector's URL, not a route.</strong> The reporter appends the
 ingest path itself, so <code>server://https://collector.example.com</code> is the whole thing
 a pipeline needs to know. A URL that already carries a path is left alone, for a

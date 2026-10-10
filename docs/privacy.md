@@ -138,7 +138,13 @@ one. Until 0.7.1 they were applied one at a time, each reading the previous one'
 output, so the generic "token = value" pattern matched the *label* of the
 placeholder that had just replaced the secret and produced
 `[redacted:github-[redacted:credential-assignment:…]]`. Matches are now collected
-against the original text and spliced in once.
+against the original text and spliced in once. A generic match around a specific
+key leaves the key's placeholder as it is: `password=` followed by a GitHub token
+becomes `password=` and the token's placeholder. When the value reaches past the key,
+as in a GitHub token with more characters after it, the key and the rest of the value
+become one placeholder under the more specific label, so no part of a longer
+credential is left in the clear. A private-key header with no matching END line
+redacts the rest of that field.
 
 **A placeholder is recognised narrowly, and that narrowness is load-bearing.** A
 second pass skips spans this redactor already wrote — that is what makes redacting
@@ -146,8 +152,10 @@ twice idempotent — and the redactor's input is the model's reply, which is
 attacker-influenced by definition. Recognising `[redacted:` *anything* `]` would
 mean that anything able to make a model emit `[redacted:` around a credential
 carried it through untouched: the output format turned into a smuggling envelope.
-Only a lower-case label with an optional twelve-hex digest is skipped, and nothing
-that fits that shape is a secret, an address or an IP.
+Only a label Guardana itself writes, with an optional twelve-hex digest, is skipped;
+any other bracketed text is read by the patterns like the rest of the reply. A value
+that is itself twelve lower-case hex characters still fits the digest slot of a real
+label, so a custom pattern for such values cannot rely on catching it there.
 
 ## One seam, and why that is the whole design
 
@@ -162,8 +170,8 @@ places has thirty exceptions, and the one that matters is the one somebody forgo
 
 `scan`, `probe` and `monitor` also redact once, early — before a baseline is
 written or matched — because a fingerprint is computed from the evidence summary.
-Redaction is idempotent: a placeholder claims its own span before any pattern is
-offered the text, so a second pass cannot read the first pass's label as content.
+Redaction is idempotent: a pattern match that lies inside an existing placeholder is
+ignored, so a second pass cannot read the first pass's label as content.
 
 **`monitor` was the exception until 0.7.1**, and it was the worst one to have: it
 printed through a renderer built with no policy — so the library default, `full` —

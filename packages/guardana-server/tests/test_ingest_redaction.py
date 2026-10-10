@@ -6,6 +6,7 @@ collector cannot import the engine, so the parity tests here are what keep the t
 copies of those patterns the same.
 """
 
+import hashlib
 import json
 import re
 from collections.abc import Iterable
@@ -45,6 +46,31 @@ _SECRETS = (
     fake_jwt(),
     "pass" + "word=" + "FAKEFAKEFAKEFAKE",
     _private_key(),
+)
+
+_REACHING_PAST = (
+    ("pass" + "word=", _github_token() + "_PRIVATE_PASSWORD_SUFFIX"),
+    ("Bearer ", _github_token() + ".rest-of-the-credential-xyz"),
+    ("api_" + "key=", fake_aws_key() + "AREALLYLONGTAILSECRET"),
+    ("", _private_key().replace("\n", "\n[redacted:email:0123456789ab]\n", 1)),
+)
+_OVERLAPPING = tuple(keyword + value for keyword, value in _REACHING_PAST)
+
+_CONTAINED = (
+    ("tok" + "en = ", _github_token(), "github-token"),
+    ("Authorization: Bearer ", fake_jwt(), "jwt"),
+    ("api_" + "key: ", fake_llm_key(), "openai-key"),
+    ("pass" + "word=", fake_aws_key(), "aws-key"),
+)
+
+_SHIELDS = (
+    "[redacted:" + fake_llm_key() + "]",
+    "[redacted:" + "xo" + "xb-1234567890-abcdefghijkl]",
+)
+
+_OPEN_KEYS = (
+    "-----BEGIN " + "PRIVATE KEY-----\n" + "FAKE" * 8 + "\n!\n" + "FAKE" * 8,
+    "-----BEGIN " + "PRIVATE KEY-----\n" + "FAKE" * 8 + "\n-----BEGIN CERTIFICATE-----\n" + "FAKE",
 )
 
 
@@ -120,8 +146,15 @@ def test_the_collector_uses_the_engine_s_secret_patterns() -> None:
     "text",
     [
         f"key {secret} and again {secret}, then {fake_aws_key()}"
-        for secret in (*_SECRETS, "[redacted:openai-key:0123456789ab]")
+        for secret in (
+            *_SECRETS,
+            *_OVERLAPPING,
+            *(keyword + key for keyword, key, _ in _CONTAINED),
+            *_SHIELDS,
+            "[redacted:openai-key:0123456789ab]",
+        )
     ]
+    + [f"key {opened}\nand the rest" for opened in _OPEN_KEYS]
     + ["nothing secret here", ""],
 )
 def test_the_collector_writes_the_placeholder_the_engine_writes(text: str) -> None:
@@ -129,6 +162,46 @@ def test_the_collector_writes_the_placeholder_the_engine_writes(text: str) -> No
     expected = EvidenceRedactor(RedactionPolicy(mode=EvidenceMode.FULL)).redact_spans(text)
 
     assert redact_text(text) == expected
+
+
+@pytest.mark.parametrize(("keyword", "value"), _REACHING_PAST)
+def test_overlapping_matches_leave_no_character_of_the_credential(keyword: str, value: str) -> None:
+    redacted = redact_text(f"seen {keyword}{value} here")
+
+    assert redacted.startswith(f"seen {keyword}[redacted:")
+    assert redacted.endswith("] here")
+    residue = re.sub(r"\[redacted:[a-z0-9-]+(?::[0-9a-f]{12})?\]", "", redacted)
+    assert residue == f"seen {keyword} here"
+
+
+@pytest.mark.parametrize(("keyword", "key", "label"), _CONTAINED)
+def test_a_generic_match_around_a_key_keeps_the_key_s_placeholder(
+    keyword: str, key: str, label: str
+) -> None:
+    digest = hashlib.sha256(key.encode()).hexdigest()[:12]
+
+    assert redact_text(f"{keyword}{key}") == f"{keyword}[redacted:{label}:{digest}]"
+
+
+@pytest.mark.parametrize("shield", _SHIELDS)
+def test_a_bracket_the_engine_never_writes_does_not_shield_a_secret(shield: str) -> None:
+    assert "abcdefghijkl" not in redact_text(shield)
+    assert fake_llm_key() not in redact_text(shield)
+
+
+def test_a_lone_surrogate_inside_a_secret_digests_as_the_engine_digests_it() -> None:
+    text = "-----BEGIN " + "PRIVATE KEY-----\nMII\ud800abc"
+    engine_side = EvidenceRedactor(RedactionPolicy(mode=EvidenceMode.FULL)).redact_spans(text)
+
+    assert redact_text(text) == engine_side
+
+
+@pytest.mark.parametrize("opened", _OPEN_KEYS)
+def test_a_key_with_no_end_is_redacted_to_the_end_of_the_text(opened: str) -> None:
+    redacted = redact_text(f"seen {opened}\nand the rest")
+
+    assert re.fullmatch(r"seen \[redacted:private-key:[0-9a-f]{12}\]", redacted)
+    assert redact_text(redacted) == redacted
 
 
 def test_a_submission_is_stored_without_the_secrets_it_carried() -> None:

@@ -8,7 +8,7 @@ when the two drift apart.
 
 import re
 from bisect import bisect_right
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from hashlib import sha256
 from typing import TypeVar
 
@@ -25,15 +25,14 @@ from pydantic import BaseModel
 
 _WORD_START = r"(?<![A-Za-z0-9_])"
 _PRIVATE_KEY_LABEL = r"[A-Z ]*PRIVATE KEY(?: BLOCK)?"
-# Most specific first: a span an earlier pattern claimed is not matched again, so a
-# key that also fits a generic pattern keeps the label of the key it is.
+# Most specific first: a span keeps the label of the earliest pattern that claimed it
+# (`_claim`), so a key that also fits a generic pattern keeps the label of the key it is.
 _SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "private-key",
         re.compile(
             rf"-----BEGIN {_PRIVATE_KEY_LABEL}-----"
-            rf"(?:(?:(?!-----BEGIN )[\s\S])*?-----END {_PRIVATE_KEY_LABEL}-----"
-            rf"|(?:\s+(?:[A-Za-z-]+:[^\n]*|[A-Za-z0-9+/=]{{16,}}))*)"
+            rf"(?:(?:(?!-----BEGIN )[\s\S])*?-----END {_PRIVATE_KEY_LABEL}-----|[\s\S]*)"
         ),
     ),
     ("aws-key", re.compile(rf"{_WORD_START}(?:AKIA|ASIA)[0-9A-Z]{{16}}")),
@@ -49,23 +48,29 @@ _SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
             rf"{_WORD_START}eyJ[A-Za-z0-9_-]{{8,}}\.[A-Za-z0-9_-]{{8,}}\.[A-Za-z0-9_-]{{8,}}"
         ),
     ),
-    ("bearer-token", re.compile(rf"(?i){_WORD_START}bearer\s+[A-Za-z0-9._-]{{16,}}")),
+    ("bearer-token", re.compile(rf"(?i){_WORD_START}bearer\s+(?P<value>[A-Za-z0-9._-]{{16,}})")),
     (
         "credential-assignment",
         re.compile(
             rf"(?i){_WORD_START}(?:api[_-]?key|secret|password|passwd|token)(?![A-Za-z0-9_])\s*[:=]\s*"
-            r"[\"']?([A-Za-z0-9/_+.-]{12,})[\"']?"
+            r"[\"']?(?P<value>[A-Za-z0-9/_+.-]{12,})[\"']?"
         ),
     ),
 )
 
-# Only the exact shape a placeholder has, so an agent's own placeholders are kept
-# as sent and nothing wrapped in a look-alike bracket passes through unredacted.
-_ALREADY_REDACTED = re.compile(r"\[redacted:[a-z0-9-]+(?::[0-9a-f]{12})?\]")
+# Only a placeholder the engine writes, one of its labels with an optional digest, so an
+# agent's own placeholders are kept as sent and nothing in a look-alike bracket is.
+_WRITTEN_LABELS = (*(label for label, _ in _SECRET_PATTERNS), "email", "ip", "query", "url")
+_ALREADY_REDACTED = re.compile(
+    r"\[redacted:(?:(?:"
+    + "|".join(re.escape(label) for label in _WRITTEN_LABELS)
+    + r"|custom-(?:0|[1-9][0-9]*))(?::[0-9a-f]{12})?|credential)\]"
+)
+_LONE_SURROGATE = re.compile("[\ud800-\udfff]")
 
 _Model = TypeVar("_Model", bound=BaseModel)
 _Item = TypeVar("_Item")
-_Span = tuple[int, int, str]
+_Span = tuple[int, int, int]
 
 _FINDING_TEXT = {"title": MAX_TEXT_LENGTH, "target_ref": MAX_TEXT_LENGTH}
 _EVIDENCE_TEXT = {"summary": MAX_TEXT_LENGTH, "detail": MAX_TEXT_LENGTH}
@@ -79,27 +84,24 @@ class RedactedTextTooLongError(ValueError):
 
 
 def redact_text(text: str) -> str:
-    """Replace every recognisable secret in `text` with a labelled placeholder."""
-    claimed: list[_Span] = [
-        (m.start(), m.end(), m.group(0)) for m in _ALREADY_REDACTED.finditer(text)
-    ]
-    starts = [start for start, _, _ in claimed]
-    for label, pattern in _SECRET_PATTERNS:
-        fresh = [
-            (match.start(), match.end(), _placeholder(label, match.group(0)))
-            for match in pattern.finditer(text)
-            if not _collides(claimed, starts, match.start(), match.end())
-        ]
-        if fresh:
-            claimed = sorted([*claimed, *fresh])
-            starts = [start for start, _, _ in claimed]
-    if not claimed:
+    """Replace every recognisable secret in `text` with a labelled placeholder.
+
+    Most specific pattern first; see `_claim` for how a later match that collides with
+    an earlier one is taken. A placeholder already in `text` is kept as written and a
+    match inside one is ignored, so redacting twice gives the text redacting once gives.
+    """
+    kept = [m.span() for m in _ALREADY_REDACTED.finditer(text)]
+    claimed = [(start, end, len(_SECRET_PATTERNS)) for start, end in kept]
+    for rank, (_, pattern) in enumerate(_SECRET_PATTERNS):
+        claimed = _claim(claimed, rank, pattern.finditer(text))
+    spans = _outside(kept, claimed)
+    if not spans:
         return text
     pieces: list[str] = []
     cursor = 0
-    for start, end, replacement in claimed:
+    for start, end, rank in spans:
         pieces.append(text[cursor:start])
-        pieces.append(replacement)
+        pieces.append(_placeholder(_SECRET_PATTERNS[rank][0], text[start:end]))
         cursor = end
     pieces.append(text[cursor:])
     return "".join(pieces)
@@ -199,8 +201,44 @@ def _with(model: _Model, changes: dict[str, object]) -> _Model:
 
 
 def _placeholder(label: str, value: str) -> str:
-    digest = sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
+    # The engine digests a lone surrogate as U+FFFD, so the two placeholders agree.
+    if _LONE_SURROGATE.search(value) is not None:
+        value = value.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
+    digest = sha256(value.encode("utf-8")).hexdigest()
     return f"[redacted:{label}:{digest[:12]}]"
+
+
+def _claim(claimed: list[_Span], rank: int, matches: Iterator[re.Match[str]]) -> list[_Span]:
+    """Add one pattern's matches to `claimed`, sorted and disjoint `(start, end, rank)` spans.
+
+    A match clear of every claimed span is claimed whole. One that collides is claimed
+    by its `value` group, or whole when it has none, unless claimed spans already cover
+    that value, so a generic pattern around a specific key changes nothing. A value
+    reaching past them merges with the spans it overlaps under the lowest rank, so no
+    character of a longer credential survives.
+    """
+    starts = [start for start, _, _ in claimed]
+    fresh: list[_Span] = []
+    for match in matches:
+        start, end = match.span()
+        if start == end:
+            continue
+        if not _collides(claimed, starts, start, end):
+            fresh.append((start, end, rank))
+            continue
+        value = match.span("value") if "value" in match.re.groupindex else (start, end)
+        if not _covered(claimed, starts, *value):
+            fresh.append((*value, rank))
+    if not fresh:
+        return claimed
+    merged: list[_Span] = []
+    for start, end, span_rank in sorted([*claimed, *fresh]):
+        if merged and start < merged[-1][1]:
+            last_start, last_end, last_rank = merged[-1]
+            merged[-1] = (last_start, max(last_end, end), min(last_rank, span_rank))
+        else:
+            merged.append((start, end, span_rank))
+    return merged
 
 
 def _collides(claimed: list[_Span], starts: list[int], start: int, end: int) -> bool:
@@ -211,3 +249,37 @@ def _collides(claimed: list[_Span], starts: list[int], start: int, end: int) -> 
         claimed[index] if index < len(claimed) else None,
     )
     return any(start < span[1] and span[0] < end for span in neighbours if span is not None)
+
+
+def _covered(claimed: list[_Span], starts: list[int], start: int, end: int) -> bool:
+    """Whether claimed spans, touching end to end, cover every character of `start`..`end`."""
+    index = bisect_right(starts, start) - 1
+    if index < 0 or claimed[index][1] <= start:
+        return False
+    reach = claimed[index][1]
+    while reach < end:
+        index += 1
+        if index == len(claimed) or claimed[index][0] != reach:
+            return False
+        reach = claimed[index][1]
+    return True
+
+
+def _outside(kept: list[tuple[int, int]], claimed: list[_Span]) -> list[_Span]:
+    """Return the parts of `claimed` that lie outside `kept`, both sorted and disjoint."""
+    spans: list[_Span] = []
+    first = 0
+    for start, end, rank in claimed:
+        while first < len(kept) and kept[first][1] <= start:
+            first += 1
+        cursor = start
+        index = first
+        while index < len(kept) and kept[index][0] < end:
+            kept_start, kept_end = kept[index]
+            if cursor < kept_start:
+                spans.append((cursor, kept_start, rank))
+            cursor = max(cursor, kept_end)
+            index += 1
+        if cursor < end:
+            spans.append((cursor, end, rank))
+    return spans
