@@ -139,7 +139,8 @@ imports it is.
   the top of the directory only (a package of the project may carry those names); and the
   recipe's own lock file and output directory when the recipe sits inside the directory, since
   `recipe lock` and `recipe run` write them. Symlinks are followed, so a linked file is pinned
-  by what it holds. The `.pth` files and setuptools `__editable__…finder.py` modules the
+  by what it holds, and a linked directory is also pinned by where it points, so retargeting it
+  changes the pin. The `.pth` files and setuptools `__editable__…finder.py` modules the
   install's `RECORD` lists are read first: a path they add or map outside the directory, or
   into a directory the tree pin leaves out (such as `build/`, where a setuptools strict
   editable install maps its packages, `.venv/` or `*.egg-info/`), is code the pin would not

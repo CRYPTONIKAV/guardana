@@ -23,10 +23,10 @@ def test_safe_torch_load_not_flagged(tmp_path: Path) -> None:
     assert findings == []
 
 
-def test_non_utf8_file_skipped_without_raising(tmp_path: Path) -> None:
+def test_an_undecodable_file_is_declined_as_not_scanned(tmp_path: Path) -> None:
     (tmp_path / "bad.py").write_bytes(b"\xff\xfe\x00invalid utf-8\x80\x81")
     findings = list(DependencyRiskRule().run(ArtifactTarget(tmp_path), RuleContext()))
-    assert findings == []
+    assert [f.title for f in findings] == ["Python file not scanned"]
 
 
 def test_flags_yaml_load_with_unsafe_loader(tmp_path: Path) -> None:

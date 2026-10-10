@@ -224,6 +224,65 @@ def test_a_symlink_inside_the_directory_is_pinned_by_what_it_holds(tmp_path: Pat
     assert edited.digest != first.digest
 
 
+@pytest.mark.parametrize("link", ["current", "zcurrent"])  # walked before and after its targets
+def test_retargeting_a_directory_symlink_inside_the_directory_changes_the_pin(
+    tmp_path: Path, link: str
+) -> None:
+    root = _source_tree(tmp_path / "acme-pack")
+    for name, body in (("v1", "SAFE = True\n"), ("v2", "SAFE = False\n")):
+        (root / "src" / name).mkdir()
+        (root / "src" / name / "impl.py").write_text(body, encoding="utf-8")
+    (root / "src" / link).symlink_to("v1", target_is_directory=True)
+    first = tree_pin(root)
+
+    (root / "src" / link).unlink()
+    (root / "src" / link).symlink_to("v2", target_is_directory=True)
+    retargeted = tree_pin(root)
+
+    assert isinstance(first, SourcePin)
+    assert isinstance(retargeted, SourcePin)
+    assert retargeted.digest != first.digest
+    assert retargeted.files == first.files
+
+
+def _versions(root: Path) -> None:
+    for name, body in (("v1", "SAFE = True\n"), ("v2", "SAFE = False\n")):
+        (root / "src" / name).mkdir()
+        (root / "src" / name / "impl.py").write_text(body, encoding="utf-8")
+
+
+def test_retargeting_a_link_chained_through_an_excluded_directory_changes_the_pin(
+    tmp_path: Path,
+) -> None:
+    root = _source_tree(tmp_path / "acme-pack")
+    _versions(root)
+    (root / ".venv").mkdir(exist_ok=True)
+    (root / ".venv/hop").symlink_to("../src/v1", target_is_directory=True)
+    (root / "src/zcurrent").symlink_to("../.venv/hop", target_is_directory=True)
+    first = tree_pin(root)
+
+    (root / ".venv/hop").unlink()
+    (root / ".venv/hop").symlink_to("../src/v2", target_is_directory=True)
+    retargeted = tree_pin(root)
+
+    assert isinstance(first, SourcePin)
+    assert isinstance(retargeted, SourcePin)
+    assert retargeted.digest != first.digest
+
+
+def test_an_absolute_directory_link_pins_the_same_in_every_checkout(tmp_path: Path) -> None:
+    pins = []
+    for checkout in ("one", "two"):
+        root = _source_tree(tmp_path / checkout / "acme-pack")
+        _versions(root)
+        (root / "src/zcurrent").symlink_to(root / "src/v1", target_is_directory=True)
+        pins.append(tree_pin(root))
+        pins.append(tree_pin(root))
+
+    assert isinstance(pins[0], SourcePin)
+    assert pins == [pins[0]] * 4
+
+
 def _record(*rows: str) -> str:
     return "".join(f"{row}\n" for row in rows)
 

@@ -161,7 +161,7 @@ class _RuleOutcome:
     suite: SuiteSummary | None = None
     """What a suite concluded, carried from its context; None for every other rule."""
 
-    raised: type[Exception] | None = None
+    raised: type[BaseException] | None = None
     """The class of the exception `error` was built from, None when no exception was."""
 
     examined: frozenset[str] = frozenset()
@@ -463,20 +463,22 @@ class Runner:
         # produce the same report. A propagating failure surfaces at the first
         # rule that hit it, deterministically, rather than whichever thread lost.
         for outcome in outcomes:
-            if isinstance(outcome, Exception):
+            if isinstance(outcome, BaseException):
                 raise outcome
             if outcome is not None:  # None: never started, because an abort won
                 yield outcome
 
     def _run_pool(
         self, plan: Sequence[Rule], target: Target, limit: int
-    ) -> list["_RuleOutcome | Exception | None"]:
+    ) -> list["_RuleOutcome | BaseException | None"]:
         """Run the plan across `limit` daemon threads; return outcomes in plan order.
 
         A `None` in the result never started, because something aborted the pool:
-        a propagating endpoint failure, or a budget that ran out.
+        a propagating failure, or a budget that ran out. A propagating failure is
+        returned rather than left in its thread, where `KeyboardInterrupt` would
+        vanish instead of ending the run as it does with one rule at a time.
         """
-        outcomes: list[_RuleOutcome | Exception | None] = [None] * len(plan)
+        outcomes: list[_RuleOutcome | BaseException | None] = [None] * len(plan)
         aborted = threading.Event()
         cursor = iter(range(len(plan)))
         lock = threading.Lock()
@@ -488,7 +490,7 @@ class Runner:
         def run_at(index: int) -> None:
             try:
                 outcome = self._execute_one(plan[index], target)
-            except Exception as exc:  # a propagating endpoint failure
+            except BaseException as exc:  # what `_execute_one` lets propagate
                 outcomes[index] = exc
                 aborted.set()
                 return
@@ -515,9 +517,8 @@ class Runner:
     def _execute_one(self, rule: Rule, target: Target) -> _RuleOutcome:
         """Run one rule, converting anything it throws into a recorded error.
 
-        Any `Exception` is caught, not just `RuleError`: a third-party rule with an
-        ordinary bug in it used to abort the entire scan. `BaseException` is
-        deliberately not caught, so Ctrl-C and `SystemExit` still stop the run.
+        Any `Exception` is caught, not just `RuleError`, and `SystemExit` with it: a
+        third-party rule must not abort the scan. `KeyboardInterrupt` still stops the run.
 
         A target that attributes exchanges is asked for this rule's own view here, in
         the thread that runs the rule, so nothing about which rule is asking is shared.
@@ -576,7 +577,9 @@ class Runner:
                 raised=type(exc),
                 shortfalls=ctx.shortfalls(),
             )
-        except Exception as exc:
+        except (Exception, SystemExit) as exc:
+            # `sys.exit()` in a rule is that rule's failure, never the end of the run:
+            # exit 0 with no report would read as a clean command.
             return _RuleOutcome(
                 rule.meta.id,
                 tuple(findings),

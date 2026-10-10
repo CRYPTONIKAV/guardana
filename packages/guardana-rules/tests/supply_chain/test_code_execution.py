@@ -52,9 +52,9 @@ def test_ignores_subprocess_without_shell(tmp_path: Path) -> None:
     assert _scan(tmp_path) == []
 
 
-def test_does_not_crash_on_a_syntax_error(tmp_path: Path) -> None:
+def test_a_syntax_error_is_declined_as_not_scanned(tmp_path: Path) -> None:
     (tmp_path / "broken.py").write_text("def (:\n", encoding="utf-8")
-    assert _scan(tmp_path) == []
+    assert [s.split(":")[0] for s in _scan(tmp_path)] == ["Python file not scanned"]
 
 
 def _findings(tmp_path: Path, source: str) -> list[tuple[str, float | None]]:

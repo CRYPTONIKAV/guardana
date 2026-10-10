@@ -44,6 +44,8 @@ MAX_SOURCE_BYTES = 256 * 1024 * 1024
 """Above this many bytes in all a distribution stays unpinned rather than read."""
 
 _TREE_TAG = b"guardana-source-tree-v1"
+_LINK_MARK = "symlink:"
+"""Prefixes where a directory symlink resolves, which no file's hex digest can match."""
 _RECORD_TAG = b"guardana-source-record-v1"
 
 _EXCLUDED_ANYWHERE = frozenset(
@@ -377,7 +379,9 @@ def tree_pin(root: Path, *, leave_out: Iterable[Path] = ()) -> SourcePin | str:
 
     Untracked files count, since an editable install imports what the directory holds.
     Symlinks are followed, so a linked file is pinned by what it holds, and one that
-    leads outside `root` leaves the directory unpinned. `leave_out` names files and
+    leads outside `root` leaves the directory unpinned. A directory symlink is pinned by
+    its path and the directory it resolves to as well, since its files are pinned only
+    once, under whichever path the walk reached first. `leave_out` names files and
     directories under `root` that are not pinned. Bytecode is not pinned, but bytecode
     Python would load in place of a pinned source leaves the directory unpinned unless it
     is what that source compiles to.
@@ -388,8 +392,9 @@ def tree_pin(root: Path, *, leave_out: Iterable[Path] = ()) -> SourcePin | str:
         return f"its directory cannot be read: {exc.strerror or type(exc).__name__}"
     if isinstance(listed, str):
         return listed
+    files, links = listed
     entries: list[tuple[bytes, str]] = []
-    for relative, path in listed:
+    for relative, path in files:
         try:
             with path.open("rb") as handle:
                 content = hashlib.file_digest(handle, "sha256").hexdigest()
@@ -399,12 +404,19 @@ def tree_pin(root: Path, *, leave_out: Iterable[Path] = ()) -> SourcePin | str:
         loaded = _bytecode_differs(path, relative)
         if loaded is not None:
             return loaded
-    return _pin(_TREE_TAG, entries)
+    linked = [(os.fsencode(relative), _LINK_MARK + target) for relative, target in links]
+    return _pin(_TREE_TAG, entries + linked, files=len(entries))
 
 
-def _listed(root: Path, leave_out: frozenset[Path]) -> list[tuple[str, Path]] | str:
-    """Every file to pin under `root`, by POSIX relative path, or why the tree stays unpinned."""
+def _listed(  # noqa: C901 — one walk lists files and links and makes every refusal
+    root: Path, leave_out: frozenset[Path]
+) -> tuple[list[tuple[str, Path]], list[tuple[str, str]]] | str:
+    """Every file and directory symlink to pin under `root`, by POSIX relative path.
+
+    A string is why the tree stays unpinned instead.
+    """
     files: list[tuple[str, Path]] = []
+    links: list[tuple[str, str]] = []
     total = 0
     visited: set[Path] = set()
 
@@ -422,6 +434,10 @@ def _listed(root: Path, leave_out: frozenset[Path]) -> list[tuple[str, Path]] | 
             continue
         visited.add(real)
         directories[:] = sorted(name for name in directories if not _excluded(name, top=top))
+        linked = _directory_links(root, here, directories)
+        if isinstance(linked, str):
+            return linked
+        links.extend(linked)
         for name in names:
             if _excluded_file(name, top=top):
                 continue
@@ -436,7 +452,26 @@ def _listed(root: Path, leave_out: frozenset[Path]) -> list[tuple[str, Path]] | 
             above = _above_bounds(len(files), total)
             if above is not None:
                 return above
-    return files
+    return files, links
+
+
+def _directory_links(root: Path, here: Path, names: list[str]) -> list[tuple[str, str]] | str:
+    """Each directory symlink among `names` in `here`, and where it resolves, both under `root`.
+
+    The resolved directory, not the link text: a chain through an excluded directory is
+    then pinned by its final hop, and an absolute target pins alike in every checkout.
+    """
+    found: list[tuple[str, str]] = []
+    for link in (here / name for name in names if (here / name).is_symlink()):
+        resolved = link.resolve()
+        if not resolved.is_relative_to(root):
+            return "a symlink leads outside its directory"
+        found.append((_posix(link, root), _posix(resolved, root)))
+    return found
+
+
+def _posix(path: Path, root: Path) -> str:
+    return PurePosixPath(*path.relative_to(root).parts).as_posix()
 
 
 def _above_bounds(files: int, total: int) -> str | None:
@@ -968,8 +1003,9 @@ def _installer_own(path: str) -> bool:
     return "/".join(parts[1:]) not in _DIST_INFO_KEPT
 
 
-def _pin(tag: bytes, entries: list[tuple[bytes, str]]) -> SourcePin:
+def _pin(tag: bytes, entries: list[tuple[bytes, str]], *, files: int | None = None) -> SourcePin:
     digest = hashlib.sha256(tag + b"\x00")
     for path, content in sorted(entries):
         digest.update(path + b"\x00" + content.encode("utf-8") + b"\n")
-    return SourcePin(digest=f"sha256:{digest.hexdigest()}", files=len(entries))
+    count = len(entries) if files is None else files
+    return SourcePin(digest=f"sha256:{digest.hexdigest()}", files=count)

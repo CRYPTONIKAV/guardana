@@ -328,6 +328,16 @@ remove, or a directory link named like a directory every scan skips, is not repo
 symlinked file whose target lies inside the scanned directory is listed and read, the
 scanned directory itself may be reached through a symlink, and a single file named on the
 command line is read even when it is a symlink.</p>
+<h2 id="python-files-the-scan-cannot-read">Python files the scan cannot read</h2>
+<p>A <code>.py</code> file is decoded the way Python decodes a module it runs, so a UTF-8 byte order
+mark or a PEP 263 coding line (<code># -*- coding: latin-1 -*-</code>) is honoured. A file that is
+too large, cannot be opened, cannot be decoded, or does not parse under the Python
+running the scan (syntax from a newer Python, a Python 2 file, a null byte) is not
+skipped: it is recorded as a source the scan could not read, so the run records an
+error, and every rule that reads Python reports it as an inconclusive &quot;not scanned&quot;
+result with an <code>unexamined_component</code> shortfall. The run is <code>indeterminate</code> (exit <code>2</code>)
+whenever such a rule runs, even with <code>fail_on_error: false</code>. Scan with a Python that parses the file, or exclude it
+with <code>.guardanaignore</code> or <code>rules.paths_exclude</code>.</p>
 <h2 id="model-files-no-rule-reads">Model files no rule reads</h2>
 <p>Every model file the scan observes must be read by a rule that ran. One that no rule
 read is a coverage shortfall named <code>unexamined_component</code>, one per format, so the run

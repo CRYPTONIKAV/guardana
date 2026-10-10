@@ -72,6 +72,18 @@ symlinked file whose target lies inside the scanned directory is listed and read
 scanned directory itself may be reached through a symlink, and a single file named on the
 command line is read even when it is a symlink.
 
+## Python files the scan cannot read
+
+A `.py` file is decoded the way Python decodes a module it runs, so a UTF-8 byte order
+mark or a PEP 263 coding line (`# -*- coding: latin-1 -*-`) is honoured. A file that is
+too large, cannot be opened, cannot be decoded, or does not parse under the Python
+running the scan (syntax from a newer Python, a Python 2 file, a null byte) is not
+skipped: it is recorded as a source the scan could not read, so the run records an
+error, and every rule that reads Python reports it as an inconclusive "not scanned"
+result with an `unexamined_component` shortfall. The run is `indeterminate` (exit `2`)
+whenever such a rule runs, even with `fail_on_error: false`. Scan with a Python that parses the file, or exclude it
+with `.guardanaignore` or `rules.paths_exclude`.
+
 ## Model files no rule reads
 
 Every model file the scan observes must be read by a rule that ran. One that no rule

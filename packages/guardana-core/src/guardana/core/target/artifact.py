@@ -135,10 +135,9 @@ class ArtifactTarget(Target):
         Every rule that inspects Python asks through here, so a file is read,
         decoded, parsed and walked once per scan instead of once per rule.
 
-        `None` means no tree, for either of two reasons, and the difference is
-        kept: a file the scan was *prevented* from reading (too large, unopenable)
-        is recorded in `unread_sources()` so the run reports it instead of letting
-        it vanish, while a file that simply is not runnable Python stays quiet.
+        `None` means no tree, and the file is recorded in `unread_sources()` with
+        the reason (too large, unopenable, undecodable, unparseable) so the run
+        reports it instead of letting it vanish.
 
         Outcomes are cached, failures included. Retrying a failure would let two
         rules disagree about the same scan if the file changed underneath them,
@@ -152,14 +151,13 @@ class ArtifactTarget(Target):
             self._unread[path] = result
             self._sources[path] = None
             return None
-        source = result
-        # A `None` costs nothing to keep, so it is always cached — that is what
-        # holds the "same answer for every rule" promise above even past the
-        # budget. Only real trees are charged against it.
-        if source is None or len(source.text) <= self._source_budget:
-            self._sources[path] = source
-            self._source_budget -= 0 if source is None else len(source.text)
-        return source
+        # Only real trees are charged against the budget; a failure is cached
+        # above whatever the budget, which holds the "same answer for every rule"
+        # promise past it.
+        if len(result.text) <= self._source_budget:
+            self._sources[path] = result
+            self._source_budget -= len(result.text)
+        return result
 
     def unread_sources(self) -> tuple[UnreadSource, ...]:
         """Every file, directory and symlink the scan was prevented from reading, in path order.

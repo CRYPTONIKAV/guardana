@@ -366,8 +366,8 @@ class MyTarget(Target):
         return self._sources[path]
 
     def unread_sources(self) -> tuple[UnreadSource, ...]:
-        # A file you were *prevented* from reading (too large, unopenable) —
-        # the runner turns these into `errors`: a check that did not run.
+        # A file that yielded no tree (too large, unopenable, undecodable,
+        # unparseable) — the runner turns these into `errors`: a check that did not run.
         return tuple(self._unread)
 ```
 

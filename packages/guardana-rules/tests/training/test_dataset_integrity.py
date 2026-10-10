@@ -67,9 +67,9 @@ def test_ordinary_class_is_not_a_loader_script(tmp_path: Path) -> None:
     assert _summaries(tmp_path) == []
 
 
-def test_does_not_crash_on_a_syntax_error(tmp_path: Path) -> None:
+def test_a_syntax_error_is_declined_as_not_scanned(tmp_path: Path) -> None:
     (tmp_path / "broken.py").write_text("class (:\n", encoding="utf-8")
-    assert _summaries(tmp_path) == []
+    assert [s.split(":")[0] for s in _summaries(tmp_path)] == ["Python file not scanned"]
 
 
 _PIN = ", revision='e6281661ce1c48d982bc483cf8a173c1bbeb5d31'"
