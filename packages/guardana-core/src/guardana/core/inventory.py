@@ -10,9 +10,11 @@ deeper (a model's architecture, a manifest's resolved versions) costs reads that
 a scan should not pay for twice, and belongs to whoever needs the depth.
 """
 
+import os
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
+from guardana.core.formats.hdf5 import find_hdf5_signature
 from guardana.core.observation import Observation, ObservationKind
 from guardana.core.target import Target
 from guardana.core.target.protocols import ChatEndpoint, FileReader
@@ -87,9 +89,24 @@ _BIN_SIGNATURES: tuple[tuple[bytes, str], ...] = (
 when its first bytes say which model container it is; one that says nothing is not
 listed."""
 _PICKLE_SIGNATURES = tuple(entry for entry in _BIN_SIGNATURES if entry[1] == "pickle")
-_PICKLE_SNIFFED_SUFFIXES = frozenset({".sav", ".p", ".model"})
-"""Suffixes that name a pickle as often as some other format, listed only when the first
-bytes are a pickle header."""
+_SNIFFED_SUFFIXES: dict[str, tuple[tuple[bytes, str], ...]] = {
+    _BIN_SUFFIX: _BIN_SIGNATURES,
+    ".sav": _PICKLE_SIGNATURES,
+    ".p": _PICKLE_SIGNATURES,
+    ".model": _PICKLE_SIGNATURES,
+    ".hdf": (),
+    ".weights": (),
+    ".tf": (),
+}
+"""Suffixes other formats share, listed only when the first bytes name a model container."""
+_HDF5_SNIFFED_SUFFIXES = frozenset({".bin", ".model", ".hdf", ".weights", ".tf"})
+"""Suffixes also listed when they hold an HDF5 file, which a Keras loader opens by content."""
+_KERAS_HDF5 = "keras-hdf5"
+_MODEL_DIRECTORY_FILES: dict[str, tuple[tuple[str, ...], str]] = {
+    "config.json": (("metadata.json", "model.weights.h5"), "keras-directory"),
+}
+"""Files that are a model only beside one of the named siblings: an unzipped Keras model
+keeps its `config.json` next to Keras' own files, while a lone `config.json` is anyone's."""
 _DATASET_SUFFIXES = frozenset({".parquet", ".jsonl", ".arrow"})
 _MANIFEST_PREFIX = "requirements"
 
@@ -123,16 +140,20 @@ def _regular_file(path: Path) -> bool:
 
 
 def _sniffed_format(
-    path: Path, signatures: tuple[tuple[bytes, str], ...] = _BIN_SIGNATURES
+    path: Path, signatures: tuple[tuple[bytes, str], ...], *, hdf5: bool
 ) -> str | None:
     if not _regular_file(path):
         return None
     try:
         with path.open("rb") as handle:
             head = handle.read(4)
+            named = next((name for magic, name in signatures if head.startswith(magic)), None)
+            if named is not None or not hdf5:
+                return named
+            size = os.fstat(handle.fileno()).st_size
+            return _KERAS_HDF5 if find_hdf5_signature(handle, size) is not None else None
     except OSError:
         return None
-    return next((name for magic, name in signatures if head.startswith(magic)), None)
 
 
 def _model_format(path: Path, suffix: str, name: str) -> str | None:
@@ -148,17 +169,28 @@ def _model_format(path: Path, suffix: str, name: str) -> str | None:
         return _MODEL_SUFFIXES[suffix]
     if name in _MODEL_NAMES:
         return _MODEL_NAMES[name]
-    if suffix == _BIN_SUFFIX:
-        return _sniffed_format(path)
-    if suffix in _PICKLE_SNIFFED_SUFFIXES:
-        return _sniffed_format(path, _PICKLE_SIGNATURES)
+    if suffix in _SNIFFED_SUFFIXES:
+        return _sniffed_format(
+            path, _SNIFFED_SUFFIXES[suffix], hdf5=suffix in _HDF5_SNIFFED_SUFFIXES
+        )
     return None
 
 
-def _classify(path: Path) -> tuple[ObservationKind, dict[str, str]] | None:
+def _directory_format(path: Path, listed: frozenset[tuple[Path, str]]) -> str | None:
+    """Return the model format a file holds by the siblings listed beside it, any case."""
+    entry = _MODEL_DIRECTORY_FILES.get(path.name.lower())
+    if entry is None:
+        return None
+    siblings, model_format = entry
+    return model_format if any((path.parent, name) in listed for name in siblings) else None
+
+
+def _classify(
+    path: Path, listed: frozenset[tuple[Path, str]]
+) -> tuple[ObservationKind, dict[str, str]] | None:
     suffix = path.suffix.lower()
     name = path.name.lower()
-    model_format = _model_format(path, suffix, name)
+    model_format = _model_format(path, suffix, name) or _directory_format(path, listed)
     if model_format is not None:
         return ObservationKind.MODEL, {"format": model_format}
     if name in _MANIFEST_NAMES or (name.startswith(_MANIFEST_PREFIX) and suffix == ".txt"):
@@ -171,8 +203,10 @@ def _classify(path: Path) -> tuple[ObservationKind, dict[str, str]] | None:
 
 
 def _observe_artifacts(target: FileReader, files: Iterable[Path] | None) -> Iterator[Observation]:
-    for path in target.iter_files() if files is None else files:
-        classified = _classify(path)
+    paths = tuple(target.iter_files() if files is None else files)
+    listed = frozenset((path.parent, path.name.lower()) for path in paths)
+    for path in paths:
+        classified = _classify(path, listed)
         if classified is None:
             continue
         kind, attributes = classified

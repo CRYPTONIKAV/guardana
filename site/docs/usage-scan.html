@@ -379,7 +379,7 @@ and in CI. A format name (<code>tflite</code>) is not a path and stays as it is.
 <td><code>guardana.supply_chain.onnx_graph</code></td>
 </tr>
 <tr>
-<td><code>.keras</code>, <code>.h5</code>, <code>.hdf5</code></td>
+<td><code>.keras</code>, <code>.h5</code>, <code>.hdf5</code>; a <code>.bin</code>, <code>.model</code>, <code>.hdf</code>, <code>.weights</code> or <code>.tf</code> that holds the HDF5 signature at its start or after a userblock; a <code>config.json</code> beside <code>metadata.json</code> or <code>model.weights.h5</code> (an unzipped Keras model directory)</td>
 <td><code>guardana.supply_chain.keras_lambda</code></td>
 </tr>
 <tr>
@@ -397,7 +397,11 @@ and in CI. A format name (<code>tflite</code>) is not a path and stays as it is.
 </tbody>
 </table></div>
 <p>A <code>.bin</code>, <code>.sav</code>, <code>.p</code> or <code>.model</code> whose first bytes match none of those is not listed as a
-model. <code>pickle_opcode</code> also reads a <code>.tar</code> or <code>.zip</code> by its content: the members named like
+model. The HDF5 signature is looked for where the HDF5 library looks: at the start and
+after a userblock of 512, 1024, 2048 bytes and so on, up to the end of the file. The
+model config is read from the first 16 MiB, so a file whose signature or config lies past
+that is reported as not scanned rather than clean. A file with no suffix is not sniffed,
+so an HDF5 model saved without one is neither listed nor read. <code>pickle_opcode</code> also reads a <code>.tar</code> or <code>.zip</code> by its content: the members named like
 a model (<code>pickle</code>, <code>data.pkl</code>, <code>*.pt</code>, <code>*.pth.tar</code>), and every member of a <code>.tar</code> that is in
 fact a zip; a member named as a model that is itself an archive is a coverage shortfall,
 and one <code>pickle.load</code> would read is still read as a stream. Any file <code>pickle_opcode</code> reads

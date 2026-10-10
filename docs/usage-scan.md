@@ -108,13 +108,17 @@ and in CI. A format name (`tflite`) is not a path and stays as it is.
 | `.npy`, and each `.npy` inside a `.npz`, or a `.bin`, `.sav`, `.p` or `.model` that starts with the NPY magic: an object array holds a pickle stream, a numeric one cannot | `guardana.supply_chain.pickle_opcode` |
 | `.bin` whose first bytes are a zip or a pickle stream (`pytorch_model.bin`); `.sav`, `.p` or `.model` whose first bytes are a pickle stream | `guardana.supply_chain.pickle_opcode` |
 | `.onnx` | `guardana.supply_chain.onnx_graph` |
-| `.keras`, `.h5`, `.hdf5` | `guardana.supply_chain.keras_lambda` |
+| `.keras`, `.h5`, `.hdf5`; a `.bin`, `.model`, `.hdf`, `.weights` or `.tf` that holds the HDF5 signature at its start or after a userblock; a `config.json` beside `metadata.json` or `model.weights.h5` (an unzipped Keras model directory) | `guardana.supply_chain.keras_lambda` |
 | `.gguf` | `guardana.supply_chain.chat_template` |
 | `.safetensors`, `.pmml` | `guardana.supply_chain.model_format` |
 | `.tflite`, `.mar`, `.nemo`, `.llamafile`, `model.tar.gz`, a compressed pickle or checkpoint (`.pkl`, `.pickle` or `.joblib` followed by `.gz`, `.z`, `.xz`, `.bz2` or `.lzma`; `.joblib.lz4`; `.pt.gz`; `.pth.gz`), a `.bin` that starts like GGUF or GGML | no built-in rule |
 
 A `.bin`, `.sav`, `.p` or `.model` whose first bytes match none of those is not listed as a
-model. `pickle_opcode` also reads a `.tar` or `.zip` by its content: the members named like
+model. The HDF5 signature is looked for where the HDF5 library looks: at the start and
+after a userblock of 512, 1024, 2048 bytes and so on, up to the end of the file. The
+model config is read from the first 16 MiB, so a file whose signature or config lies past
+that is reported as not scanned rather than clean. A file with no suffix is not sniffed,
+so an HDF5 model saved without one is neither listed nor read. `pickle_opcode` also reads a `.tar` or `.zip` by its content: the members named like
 a model (`pickle`, `data.pkl`, `*.pt`, `*.pth.tar`), and every member of a `.tar` that is in
 fact a zip; a member named as a model that is itself an archive is a coverage shortfall,
 and one `pickle.load` would read is still read as a stream. Any file `pickle_opcode` reads
