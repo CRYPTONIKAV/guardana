@@ -77,6 +77,12 @@ _HOSTILE_SUFFIXES = (
     ".jinja",
     ".txt",
     ".py",
+    ".pkl.gz",
+    ".pkl.z",
+    ".joblib.xz",
+    ".pickle.bz2",
+    ".pkl.lzma",
+    ".joblib.lz4",
 )
 """Every extension a built-in artifact rule opens and reads the contents of.
 
@@ -101,6 +107,12 @@ _MAGICS = (
     b'{"__metadata__":',
     b"<PMML>",
     b'node { op: "Write\\',  # a SavedModel text graph, cut inside an escaped op name
+    b"\x1f\x8b\x08\x00",  # gzip
+    b"\x78\x9c",  # zlib
+    b"BZh9",
+    b"\xfd7zXZ\x00",
+    b"\x5d\x00\x00\x80\x00",  # lzma
+    b"ZF0x40               ",  # joblib's legacy zlib header
 )
 
 
@@ -241,5 +253,6 @@ def test_the_corpus_covers_every_extension_a_built_in_rule_opens(tmp_path: Path)
             list(rule.run(target, RuleContext()))
 
     assert asked, "no rule asked for a suffix, so this test is measuring nothing"
-    missing = sorted(asked - set(_HOSTILE_SUFFIXES))
+    fed = {Path(f"model{suffix}").suffix for suffix in _HOSTILE_SUFFIXES}
+    missing = sorted(asked - fed)
     assert not missing, f"extensions a rule reads and the corpus never feeds it: {missing}"

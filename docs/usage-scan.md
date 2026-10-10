@@ -146,12 +146,13 @@ and in CI. A format name (`tflite`) is not a path and stays as it is.
 | `.pkl`, `.pickle`, `.dill`, `.joblib`, `.pt`, `.pth`, `.ckpt`, `.ptl`, `.pdparams`, `.pth.tar`, `.pt.tar` | `guardana.supply_chain.pickle_opcode` |
 | `.npy`, and each `.npy` inside a `.npz`, or a `.bin`, `.sav`, `.p` or `.model` that starts with the NPY magic: an object array holds a pickle stream, a numeric one cannot | `guardana.supply_chain.pickle_opcode` |
 | `.bin` whose first bytes are a zip or a pickle stream (`pytorch_model.bin`); `.sav`, `.p` or `.model` whose first bytes are a pickle stream | `guardana.supply_chain.pickle_opcode` |
+| a compressed pickle or checkpoint (`.pkl`, `.pickle` or `.joblib` followed by `.gz`, `.z`, `.xz`, `.bz2` or `.lzma`; `.joblib.lz4`; `.pt.gz`; `.pth.gz`) | `guardana.supply_chain.pickle_opcode` |
 | `.onnx` | `guardana.supply_chain.onnx_graph` |
 | `.keras`, `.h5`, `.hdf5`; a `.bin`, `.model`, `.hdf`, `.weights` or `.tf` that holds the HDF5 signature at its start or after a userblock; a `config.json` beside `metadata.json` or `model.weights.h5` (an unzipped Keras model directory) | `guardana.supply_chain.keras_lambda` |
 | `.gguf` | `guardana.supply_chain.chat_template` |
 | `.safetensors`, `.pmml` | `guardana.supply_chain.model_format` |
 | `saved_model.pb`, `saved_model.pbtxt` (the text form TensorFlow loads when there is no `.pb`; its `op` values are decoded as protobuf decodes them, and one that cannot be decoded is a shortfall) | `guardana.supply_chain.saved_model_ops` |
-| `.tflite`, `.mar`, `.nemo`, `.llamafile`, `model.tar.gz`, a compressed pickle or checkpoint (`.pkl`, `.pickle` or `.joblib` followed by `.gz`, `.z`, `.xz`, `.bz2` or `.lzma`; `.joblib.lz4`; `.pt.gz`; `.pth.gz`), a `.bin` that starts like GGUF or GGML | no built-in rule |
+| `.tflite`, `.mar`, `.nemo`, `.llamafile`, `model.tar.gz`, a `.bin` that starts like GGUF or GGML | no built-in rule |
 
 A `.bin`, `.sav`, `.p` or `.model` whose first bytes match none of those is not listed as a
 model. The HDF5 signature is looked for where the HDF5 library looks: at the start and
@@ -159,9 +160,31 @@ after a userblock of 512, 1024, 2048 bytes and so on, up to the end of the file.
 model config is read from the first 16 MiB, so a file whose signature or config lies past
 that is reported as not scanned rather than clean. A file with no suffix is not sniffed,
 so an HDF5 model saved without one is neither listed nor read. `pickle_opcode` also reads a `.tar` or `.zip` by its content: the members named like
-a model (`pickle`, `data.pkl`, `*.pt`, `*.pth.tar`), and every member of a `.tar` that is in
-fact a zip; a member named as a model that is itself an archive is a coverage shortfall,
-and one `pickle.load` would read is still read as a stream. Any file `pickle_opcode` reads
+a model (`pickle`, `data.pkl`, `*.pt`, `*.pth.tar`, `*.pkl.gz`), every member of a `.zip`
+whose first bytes are an NPY array or a pickle header whatever its name, and every member
+of a `.tar` that is in fact a zip; a member named as a model that is itself an archive is a coverage
+shortfall, and one `pickle.load` would read is still read as a stream. A member named as a
+model it does not open inside an archive (`*.safetensors`, `*.gguf`, `*.onnx`, `*.keras`,
+`model.tar.gz` and the rest of the last row above, and HDF5 files (`*.h5`, `*.hdf5`, `*.hdf`, `*.weights`, `*.tf`) and a Keras directory's
+`config.json` or `model.weights.h5` inside a model archive, though not inside a plain
+`.zip` or `.tar`, where HDF5 is as often a dataset) is a
+coverage shortfall that names it; a zip member counts under its directory name and under an
+Info-ZIP Unicode Path alike. A file or member it reads whose first bytes are a zlib, gzip,
+bz2, lzma, xz or lz4 header, or joblib's own legacy one, is decompressed first, as
+`joblib.load` does whatever the name, up to 64 MiB per file or member, 512 MiB per archive
+and 1,024 streams back to back; past a bound, damaged part-way (what was decompressed
+before the damage is still read), or in lz4 or another form it cannot decompress, it is a
+coverage shortfall. A zip whose
+central directory is not where its end record declares it, as with bytes before the zip
+or two directories, is a coverage shortfall rather than read, because zip readers would
+disagree on its members, and so is a member stored with two different sizes or whose local
+header disagrees with its directory entry, and a pickle read that crosses the end of a
+frame; a `.zip` is found by its end record wherever the zip data starts, and is
+also read as a stream when its first bytes are not a zip's,
+and a file that starts with an end record is opened as a zip, as `np.load` does. In a
+legacy tar, the `storages` and `tensors` members are read as `torch.load` reads them, a
+pickle before each run of raw tensor bytes; a layout it cannot follow is a coverage
+shortfall. Any file `pickle_opcode` reads
 that does not start as a zip and whose first 512-byte block is a tar header (`ustar`, or
 the older v7 form without `ustar` magic) is read as a tar, whatever it is named, because
 `torch.load` opens a legacy `torch.save` file that way. The same file is also read as the
