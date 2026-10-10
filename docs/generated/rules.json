@@ -282,7 +282,7 @@
       "requires": [
         "list_tools"
       ],
-      "estimated_requests": 4,
+      "estimated_requests": 22,
       "goal": null,
       "taxonomy": [
         {
@@ -608,7 +608,7 @@
         "inspect_authorization",
         "list_tools"
       ],
-      "estimated_requests": 7,
+      "estimated_requests": 25,
       "goal": null,
       "taxonomy": [
         {
