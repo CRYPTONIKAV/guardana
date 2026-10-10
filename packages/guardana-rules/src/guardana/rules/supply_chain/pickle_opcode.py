@@ -98,7 +98,7 @@ _UNREAD_MODEL_SUFFIXES = frozenset(
         ".tflite",
     }
 )
-_UNREAD_MODEL_NAMES = frozenset({"model.tar.gz"})
+_UNREAD_MODEL_NAMES = frozenset({"model.tar.gz", "saved_model.pb", "saved_model.pbtxt"})
 """Model files the inventory recognises that no reader here opens inside an archive."""
 _DATASET_SHARED_SUFFIXES = frozenset({".h5", ".hdf5", ".hdf", ".weights", ".tf"})
 """HDF5 holds datasets as often as Keras models, so inside a plain archive it is not named."""
