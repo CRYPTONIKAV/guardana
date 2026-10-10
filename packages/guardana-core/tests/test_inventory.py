@@ -231,3 +231,23 @@ def test_a_keras_model_directory_is_recognised_whatever_the_case_of_its_names(
     (tmp_path / "METADATA.JSON").write_text("{}", encoding="utf-8")
 
     assert _model_formats(tmp_path) == {"Config.json": "keras-directory"}
+
+
+def test_a_tensorflow_savedmodel_graph_is_listed_by_its_exact_name(tmp_path: Path) -> None:
+    (tmp_path / "binary").mkdir()
+    (tmp_path / "binary" / "saved_model.pb").write_bytes(b"\x08\x01")
+    (tmp_path / "text").mkdir()
+    (tmp_path / "text" / "saved_model.pbtxt").write_text("meta_graphs {}\n")
+    (tmp_path / "graph.pb").write_bytes(b"\x08\x01")
+    (tmp_path / "label_map.pbtxt").write_text("item {}\n")
+
+    formats = {
+        item.name: item.attributes["format"]
+        for item in observe(ArtifactTarget(tmp_path))
+        if item.kind is ObservationKind.MODEL
+    }
+
+    assert formats == {
+        "saved_model.pb": "tensorflow-savedmodel",
+        "saved_model.pbtxt": "tensorflow-savedmodel",
+    }

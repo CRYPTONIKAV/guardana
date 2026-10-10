@@ -56,9 +56,14 @@ _MODEL_NAME_ENDINGS: tuple[tuple[str, str], ...] = (
     ),
 )
 """Model files named by more than their last suffix, matched against the whole name."""
-_MODEL_NAMES: dict[str, str] = {"model.tar.gz": "sagemaker-model"}
+_MODEL_NAMES: dict[str, str] = {
+    "model.tar.gz": "sagemaker-model",
+    "saved_model.pb": "tensorflow-savedmodel",
+    "saved_model.pbtxt": "tensorflow-savedmodel",
+}
 """Model files known by their exact name: a SageMaker model is uploaded as `model.tar.gz`,
-while any other `.tar.gz` is as likely a source release."""
+while any other `.tar.gz` is as likely a source release, and TensorFlow loads a SavedModel
+graph only from `saved_model.pb` or, without one, its text form `saved_model.pbtxt`."""
 _MANIFEST_NAMES = frozenset(
     {
         "requirements.txt",

@@ -84,19 +84,46 @@ A model or notebook a rule tried to read and could not is a shortfall of the sam
 named by its file: a pickle, archive or graph that does not parse, a pickle import whose
 name the scanner cannot resolve, a model file that cannot be opened (a `.bin` included,
 since it may be a model), a safetensors file whose header is malformed, a file cut by a
-read bound, a PMML document past the bound, a notebook that is not JSON. The rule reports
+read bound, a PMML document past the bound, a notebook that is not JSON, a notebook whose
+`kernelspec.language` or `language_info.name` is not Python. The rule reports
 two things for it: an inconclusive "not scanned" result on the unverified channel, and an
 `unexamined_component` shortfall whose name is the file's path and whose detail reads
 `<rule id> could not read it: <reason>`. The file is not named a second time by format.
 With no switch over it, a scan holding one such file is `indeterminate` (exit `2`) under
 every preset, `ci` included, unless a finding fails it. A notebook cell that does not
 parse as Python is not one: the notebook was read, and the cell is reported as an
-unverified result only. The IPython line magics `%time`, `%timeit`, `%prun` and `%debug`,
+unverified result only. A cell too complex for the Python parser to hold is inconclusive
+and a shortfall. The IPython line magics `%time`, `%timeit`, `%prun` and `%debug`,
 and the first line of the `%%timeit`, `%%prun` and `%%debug` cell magics, are read as
-Python after their options are removed; `%system` and `%sx` lines are read as shell
-escapes, like `!`, and `%%sx`, `%%system` and `%%!` cells as shell cells, like `%%bash`,
-whose magic is found on the first non-blank line; other magics are skipped. A magic whose
-statement does not parse makes the cell inconclusive.
+Python after their options are removed; the bodies of `%%time`, `%%capture`, `%%writefile`
+and `%%script python` cells are read as Python. `%system` and `%sx` lines are read as shell
+escapes, like `!`, and so is the command an `%alias` defines, wherever the alias is called.
+`%%bash`, `%%sh`, `%%sx`, `%%system`, `%%!` and `%%script` with a shell are shell cells,
+whose magic is found on the first non-blank line. A shell cell is read as the shell joins
+it: a line ending in a backslash, `|`, `&&` or `||` continues on the next, and a `!` or
+`%` line ending in a backslash continues as IPython joins it. Magics that only change
+interpreter state (`%matplotlib`, `%config`, `%env`, `%cd`, `%autoreload`, `%load_ext`
+of IPython's own `autoreload` or `storemagic`, and the like) are skipped. Any other magic
+is not skipped: `%run`, `%load_ext`, `%pip`, `%conda`, a magic the rule does not know,
+and a cell magic that runs another language (`%%perl`, `%%R`, `%%html`, `%%script perl`)
+make the cell inconclusive and add an `unexamined_component` shortfall naming the notebook
+and the magic, and a foreign cell's body is never read as Python. A magic whose statement
+does not parse makes the cell inconclusive. Each `{…}` expression IPython evaluates
+inside a `!` line or a magic's arguments (`{{` and `}}` are literal braces) is scanned as
+Python with the rest of the cell; one that is not Python syntax, such as an `awk`
+program, evaluates nothing, since IPython then runs the command unexpanded.
+`target = !cmd` and `target = %magic` are read as the bare form. A cell that is a single
+line starting with a line magic's name (`run x.py`, `pip install x`, `ls -la`) is read as
+that magic, as IPython's automagic runs it, unless the rest starts with `=` or `,` or an
+earlier cell, a builtin or a keyword binds the name; after `%rehashx`, such a line
+starting with any other unbound word is inconclusive, since it may name an executable.
+A magic defined with `%alias_magic` is read as its target. Calls on the IPython object,
+under any name `get_ipython` is imported or assigned as, are read as the escape, magic
+or cell they spell (`system`, `getoutput`, `run_line_magic`, `run_cell_magic`,
+`run_cell`, `run_cell_async`, a magic returned by `find_line_magic` and called, the same
+methods reached through `getattr`). Its namespaces, history and display data are inert.
+Any other method, an argument that is not a literal, or a method taken without being
+called is reported unscanned: inconclusive and a shortfall.
 
 Shortfall names are relative to the working directory, as finding locations are, and the
 scan root is removed from their detail, so a saved run names the same file on a laptop
@@ -111,6 +138,7 @@ and in CI. A format name (`tflite`) is not a path and stays as it is.
 | `.keras`, `.h5`, `.hdf5`; a `.bin`, `.model`, `.hdf`, `.weights` or `.tf` that holds the HDF5 signature at its start or after a userblock; a `config.json` beside `metadata.json` or `model.weights.h5` (an unzipped Keras model directory) | `guardana.supply_chain.keras_lambda` |
 | `.gguf` | `guardana.supply_chain.chat_template` |
 | `.safetensors`, `.pmml` | `guardana.supply_chain.model_format` |
+| `saved_model.pb`, `saved_model.pbtxt` (the text form TensorFlow loads when there is no `.pb`; its `op` values are decoded as protobuf decodes them, and one that cannot be decoded is a shortfall) | `guardana.supply_chain.saved_model_ops` |
 | `.tflite`, `.mar`, `.nemo`, `.llamafile`, `model.tar.gz`, a compressed pickle or checkpoint (`.pkl`, `.pickle` or `.joblib` followed by `.gz`, `.z`, `.xz`, `.bz2` or `.lzma`; `.joblib.lz4`; `.pt.gz`; `.pth.gz`), a `.bin` that starts like GGUF or GGML | no built-in rule |
 
 A `.bin`, `.sav`, `.p` or `.model` whose first bytes match none of those is not listed as a

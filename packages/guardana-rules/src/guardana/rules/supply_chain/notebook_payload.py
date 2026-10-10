@@ -1,8 +1,8 @@
 import ast
 import json
 import re
-from collections.abc import Iterable, Iterator
-from dataclasses import dataclass
+from collections.abc import Generator, Iterable, Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from guardana.core.evaluator.base import Verdict
@@ -22,39 +22,31 @@ from guardana.core.taxonomy import (
 from guardana.rules._base import ArtifactRule
 from guardana.rules.supply_chain import _samples
 from guardana.rules.supply_chain._code_sinks import code_sinks
-from guardana.rules.supply_chain._leads import unread_component, unscanned_verdict
+from guardana.rules.supply_chain._ipython_cells import (
+    PIPE_TO_SHELL,
+    CellReading,
+    NotebookState,
+    bind_names,
+    ipython_calls,
+    read_cell,
+    read_shell_command,
+)
+from guardana.rules.supply_chain._leads import lead_verdict, unread_component, unscanned_verdict
 from guardana.rules.supply_chain._reading import MAX_SCAN_BYTES, read_text_prefix
 
-# Fetching a script and piping it straight into a shell (`curl … | sh`) is the
-# classic notebook payload — a channel the `.py` AST scanners never see.
-_PIPE_TO_SHELL = re.compile(r"\|\s*(sudo\s+)?(ba)?sh\b")
-_SHELL_CELL_MAGIC = ("%%bash", "%%sh", "%%script", "%%sx", "%%system", "%%!")
-# IPython shell forms that are not Python: a `!` line escape, and `var = !cmd`.
-_ASSIGN_SHELL = re.compile(r"^\s*[\w.]+\s*=\s*!(.*)$")
-_SHELL_LINE_MAGICS = frozenset({"system", "sx"})
-_OPTION_WORD = re.compile(r"\S+")
+# How deep calls on the IPython object may nest inside the code they run before the
+# rest is reported unread.
+_MAX_IPYTHON_NESTING = 4
 
 
-@dataclass(frozen=True)
-class _MagicOptions:
-    """The leading options a Python-running line magic accepts before its statement."""
+@dataclass
+class _NotebookScan:
+    """One notebook being scanned: its path, the state its cells build, what was unread."""
 
-    flags: str = ""
-    valued: str = ""
-    long_valued: tuple[str, ...] = ()
-
-
-# Line magics that execute their argument as Python, with the options IPython
-# parses off the front of it (getopt for `timeit`/`prun`, argparse for `debug`).
-_PYTHON_LINE_MAGICS = {
-    "time": _MagicOptions(),
-    "timeit": _MagicOptions(flags="tcqo", valued="nrpv"),
-    "prun": _MagicOptions(flags="rq", valued="DlsT"),
-    "debug": _MagicOptions(valued="b", long_valued=("breakpoint",)),
-}
-# Cell magics whose own line, after its options, is also run as Python (the
-# setup statement for `%%timeit`); `%%time` refuses code on that line.
-_PYTHON_CELL_MAGICS = {name: _PYTHON_LINE_MAGICS[name] for name in ("timeit", "prun", "debug")}
+    path: Path
+    ctx: RuleContext
+    state: NotebookState = field(default_factory=NotebookState)
+    unread: set[str] = field(default_factory=set)
 
 
 def _cell_source(cell: object) -> str | None:
@@ -67,105 +59,27 @@ def _cell_source(cell: object) -> str | None:
     return source if isinstance(source, str) else None
 
 
-def _short_options(word: str, options: _MagicOptions) -> bool | None:
-    """Read a getopt-style cluster such as `-qn1`.
-
-    None means `word` is not an option cluster this magic accepts; otherwise the
-    result says whether the next word is the value of its last option.
-    """
-    if word == "-" or not word.startswith("-") or word.startswith("--"):
-        return None
-    for position, char in enumerate(word[1:], start=1):
-        if char in options.valued:
-            return position == len(word) - 1
-        if char not in options.flags:
-            return None
-    return False
-
-
-def _long_option(word: str, options: _MagicOptions) -> bool | None:
-    """Read `--name[=value]`; None unless it abbreviates an option this magic accepts."""
-    name, equals, _ = word[2:].partition("=")
-    if not word.startswith("--") or not name:
-        return None
-    if not any(option.startswith(name) for option in options.long_valued):
-        return None
-    return not equals
+def _languages(doc: dict[str, object]) -> list[str]:
+    """Return the kernel languages a notebook declares, in the metadata IPython writes."""
+    metadata = doc.get("metadata")
+    if not isinstance(metadata, dict):
+        return []
+    declared: list[object] = []
+    kernelspec = metadata.get("kernelspec")
+    if isinstance(kernelspec, dict):
+        declared.append(kernelspec.get("language"))
+    language_info = metadata.get("language_info")
+    if isinstance(language_info, dict):
+        declared.append(language_info.get("name"))
+    return [
+        value if isinstance(value, str) else repr(value)
+        for value in declared
+        if value is not None and not (isinstance(value, str) and not value.strip())
+    ]
 
 
-def _magic_statement(args: str, options: _MagicOptions) -> str:
-    """Return the Python a line magic runs: `args` past the options it accepts.
-
-    The first word that is not an accepted option starts the statement, so an
-    unknown option stays in the Python and is parsed with it, never discarded.
-    """
-    value_pending = False
-    for match in _OPTION_WORD.finditer(args):
-        word = match.group()
-        if value_pending:
-            value_pending = False
-            continue
-        if word == "--":
-            return args[match.end() :].lstrip()
-        takes_value = _short_options(word, options)
-        if takes_value is None:
-            takes_value = _long_option(word, options)
-        if takes_value is None:
-            return args[match.start() :]
-        value_pending = takes_value
-    return ""
-
-
-def _magic_python(args: str, options: _MagicOptions | None, indent: str) -> str:
-    """Return the Python a magic line contributes in its place; blank if it runs none."""
-    if options is None:
-        return ""
-    statement = _magic_statement(args, options)
-    return indent + statement if statement else ""
-
-
-def _split_shell_and_python(source: str) -> tuple[str, list[str]]:
-    """Separate a cell into (Python source, shell command lines).
-
-    `!` escapes, `var = !cmd`, `%system`/`%sx` and `%%bash`-style cell magics run
-    a shell, not Python. A magic that runs Python (`%time`, `%timeit`, `%prun`,
-    `%debug`, and the first line of `%%timeit`, `%%prun`, `%%debug`) keeps its
-    statement in place of the magic; every other magic line is dropped so the
-    remaining Python parses. Removed lines are blanked, not deleted, so a
-    reported line still maps to the cell.
-    """
-    lines = source.splitlines()
-    # IPython drops leading blank lines before it looks for a cell magic.
-    first = next((index for index, line in enumerate(lines) if line.strip()), None)
-    if first is not None and lines[first].lstrip().startswith(_SHELL_CELL_MAGIC):
-        return "", lines
-    python: list[str] = []
-    shell: list[str] = []
-    for index, line in enumerate(lines):
-        stripped = line.lstrip()
-        assign = _ASSIGN_SHELL.match(line)
-        if stripped.startswith("!"):
-            shell.append(stripped[1:])
-            python.append("")
-        elif assign:
-            shell.append(assign.group(1))
-            python.append("")
-        elif stripped.startswith("%%"):
-            name, _, args = stripped[2:].partition(" ")
-            options = _PYTHON_CELL_MAGICS.get(name) if index == first else None
-            python.append(_magic_python(args, options, ""))
-        elif stripped.startswith("%"):
-            # IPython takes the magic's name up to the first space, exactly.
-            name, _, args = stripped[1:].partition(" ")
-            if name in _SHELL_LINE_MAGICS:
-                shell.append(args)
-                python.append("")
-            else:
-                indent = line[: len(line) - len(stripped)]
-                python.append(_magic_python(args, _PYTHON_LINE_MAGICS.get(name), indent))
-        else:
-            python.append(line)
-    return "\n".join(python), shell
+def _is_python(language: str) -> bool:
+    return re.fullmatch(r"i?python[\d.]*", language.strip().lower().replace(" ", "")) is not None
 
 
 class NotebookPayloadRule(ArtifactRule):
@@ -173,9 +87,11 @@ class NotebookPayloadRule(ArtifactRule):
 
     Notebooks are a primary ML distribution format, yet the `.py` scanners never
     see inside them. This applies the shared code-sink detection to each code
-    cell, and catches the notebook-only channels — a `!curl … | sh` escape or a
-    `%%bash` cell. A cell whose Python cannot be parsed is surfaced as a lead,
-    never silently skipped: an un-analyzable cell is not a proven-clean one.
+    cell, and catches the notebook-only channels — a `!curl … | sh` escape, a
+    `%%bash` cell or a `%alias`. A cell whose Python cannot be parsed, a magic that
+    runs code the rule does not read (`%run`, `%pip`, `%%perl`) and a notebook whose
+    kernel is not Python are reported as inconclusive, never silently skipped: an
+    un-analyzable cell is not a proven-clean one.
     """
 
     meta = RuleMeta(
@@ -252,10 +168,16 @@ class NotebookPayloadRule(ArtifactRule):
         if not isinstance(cells, list):
             yield self._unscanned(path, "the notebook declares no list of cells", ctx)
             return
+        foreign = next((name for name in _languages(doc) if not _is_python(name)), None)
+        if foreign is not None:
+            reason = f"its kernel language is {foreign}, which this rule does not read"
+            yield self._unscanned(path, reason, ctx)
+            return
+        scan = _NotebookScan(path, ctx)
         for index, cell in enumerate(cells):
             source = _cell_source(cell)
             if source is not None:
-                yield from self._scan_cell(path, index, source)
+                yield from self._scan_cell(scan, index, read_cell(source, scan.state))
 
     def _unscanned(self, path: Path, reason: str, ctx: RuleContext) -> Finding:
         """Say the notebook was not examined, rather than returning as if it were clean."""
@@ -272,29 +194,80 @@ class NotebookPayloadRule(ArtifactRule):
             verdict=unscanned_verdict("the notebook could not be read, so nothing was cleared"),
         )
 
-    def _scan_cell(self, path: Path, index: int, source: str) -> Iterator[Finding]:
-        python, shell = _split_shell_and_python(source)
-        for line in shell:
-            if _PIPE_TO_SHELL.search(line):
+    def _scan_cell(
+        self, scan: _NotebookScan, index: int, cell: CellReading, depth: int = 0
+    ) -> Iterator[Finding]:
+        path = scan.path
+        scan.state.bound |= cell.bound
+        for line in cell.shell:
+            if PIPE_TO_SHELL.search(line):
                 yield self._finding(
                     path, index, Severity.HIGH, "shell escape pipes a download into a shell"
                 )
+        for label in dict.fromkeys(cell.unread):
+            yield self._unread(scan, index, label)
+        tree = yield from self._parse(scan, index, cell)
+        if tree is None:
+            return
+        bind_names(tree, scan.state)
+        # A notebook cell is source without a file of its own, so it is wrapped in
+        # the same index the `.py` rules use — one walk, and `code_sinks` needs no
+        # second shape to understand.
+        for _lineno, why, lead in code_sinks(PythonSource(path, cell.python, tree)):
+            yield self._finding(
+                path, index, Severity.HIGH, why, lead_verdict(why) if lead else None
+            )
+        for kind, text in ipython_calls(tree, scan.state):
+            if text is None or depth >= _MAX_IPYTHON_NESTING:
+                yield self._unread(scan, index, kind)
+                continue
+            nested = read_shell_command(text) if kind == "shell" else read_cell(text, scan.state)
+            yield from self._scan_cell(scan, index, nested, depth + 1)
+
+    def _unread(self, scan: _NotebookScan, index: int, label: str) -> Finding:
+        """Report something a cell runs that was not read; name it once per notebook."""
+        if label not in scan.unread:
+            scan.unread.add(label)
+            reason = f"{label} runs code or input this rule does not read"
+            scan.ctx.shortfall(unread_component(self.meta.id, scan.path, reason))
+        return self._finding(
+            scan.path,
+            index,
+            Severity.LOW,
+            f"cell runs {label}, which this rule does not read",
+            unscanned_verdict(f"what {label} runs was not read, so it was not cleared"),
+        )
+
+    def _parse(
+        self, scan: _NotebookScan, index: int, cell: CellReading
+    ) -> Generator[Finding, None, ast.Module | None]:
+        """Parse a cell's Python; return its tree, or None after reporting why there is none."""
         try:
-            tree = ast.parse(python)
+            tree = None if cell.too_complex else ast.parse(cell.python)
+        except (MemoryError, RecursionError):
+            tree = None
         except SyntaxError:
             yield self._finding(
-                path,
+                scan.path,
                 index,
                 Severity.LOW,
                 "notebook cell could not be parsed as Python; not analyzed",
                 unscanned_verdict("the cell could not be parsed, so nothing in it was cleared"),
             )
-            return
-        # A notebook cell is source without a file of its own, so it is wrapped in
-        # the same index the `.py` rules use — one walk, and `code_sinks` needs no
-        # second shape to understand.
-        for _lineno, why in code_sinks(PythonSource(path, python, tree)):
-            yield self._finding(path, index, Severity.HIGH, why)
+            return None
+        if tree is None:
+            if "too complex" not in scan.unread:
+                scan.unread.add("too complex")
+                reason = "a cell is too complex for the Python parser"
+                scan.ctx.shortfall(unread_component(self.meta.id, scan.path, reason))
+            yield self._finding(
+                scan.path,
+                index,
+                Severity.LOW,
+                "notebook cell is too complex to parse as Python; not analyzed",
+                unscanned_verdict("the cell could not be parsed, so nothing in it was cleared"),
+            )
+        return tree
 
     def _finding(
         self,

@@ -61,6 +61,7 @@ _HOSTILE_SUFFIXES = (
     ".keras",
     ".pmml",
     ".pb",
+    ".pbtxt",
     ".npy",
     ".npz",
     ".sav",
@@ -99,6 +100,7 @@ _MAGICS = (
     b"\x93NUMPY\x01\x00\x40\x00{'descr': '|O', 'fortran_order': False, 'shape': (1,)}",
     b'{"__metadata__":',
     b"<PMML>",
+    b'node { op: "Write\\',  # a SavedModel text graph, cut inside an escaped op name
 )
 
 
@@ -130,7 +132,9 @@ def test_no_artifact_rule_raises_on_bytes_nobody_wrote(
     failure this catches is the scan going `indeterminate` because a struct
     unpacked short, and the file that did it being one an attacker uploaded.
     """
-    (tmp_path / f"model{suffix}").write_bytes(magic + body)
+    # A SavedModel graph is read only under its own name in its text form.
+    stem = "saved_model" if suffix == ".pbtxt" else "model"
+    (tmp_path / f"{stem}{suffix}").write_bytes(magic + body)
     target = ArtifactTarget(tmp_path)
     ctx = RuleContext()
 
@@ -194,7 +198,13 @@ def test_the_text_parsers_survive_arbitrary_unicode(tmp_path: Path, text: str) -
     These rules exist *because* text can carry what a reader cannot see, so the
     input they are pointed at is exactly the input most likely to be malformed.
     """
-    for name in ("config.json", "chat_template.jinja", "README.txt", "loader.py"):
+    for name in (
+        "config.json",
+        "chat_template.jinja",
+        "README.txt",
+        "loader.py",
+        "saved_model.pbtxt",
+    ):
         (tmp_path / name).write_text(text, encoding="utf-8", errors="surrogatepass")
     target = ArtifactTarget(tmp_path)
     ctx = RuleContext()

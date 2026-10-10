@@ -179,3 +179,13 @@ def test_a_padded_file_does_not_evade_the_scan(tmp_path: Path) -> None:
     (tmp_path / "big.py").write_text(sink_then_filler, encoding="utf-8")
     findings = list(DependencyRiskRule().run(ArtifactTarget(tmp_path), RuleContext()))
     assert any("weights_only" in f.evidence.summary for f in findings)
+
+
+def test_an_assignment_in_a_function_does_not_hide_an_imported_pickle(tmp_path: Path) -> None:
+    (tmp_path / "load.py").write_text(
+        "import pickle\n\n\ndef helper():\n    pickle = __import__('json')\n    return pickle\n\n\n"
+        "pickle.loads(data)\n",
+        encoding="utf-8",
+    )
+    findings = list(DependencyRiskRule().run(ArtifactTarget(tmp_path), RuleContext()))
+    assert len(findings) == 1

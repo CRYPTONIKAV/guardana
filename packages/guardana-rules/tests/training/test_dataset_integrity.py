@@ -234,3 +234,13 @@ def test_the_rule_proves_all_three_outcomes_on_its_own_samples() -> None:
 
     assert verified.is_proven, verified
     assert {r.observed for r in verified.results} >= set(DEMANDED_OUTCOMES)
+
+
+def test_an_assignment_in_a_function_does_not_hide_an_imported_module(tmp_path: Path) -> None:
+    (tmp_path / "train.py").write_text(
+        "import datasets\n\n\ndef helper():\n"
+        "    datasets = __import__('json')\n    return datasets\n\n\n"
+        "ds = datasets.load_dataset('imdb')\n",
+        encoding="utf-8",
+    )
+    assert len(_unpinned(tmp_path)) == 1

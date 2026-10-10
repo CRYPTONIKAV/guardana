@@ -14,8 +14,10 @@ rule can defend.
 
 import ast
 import os
+import sys
 from collections.abc import Iterator
 from pathlib import Path
+from types import FrameType
 
 import pytest
 from guardana.core.plugins import PluginMode, PluginTrust
@@ -23,6 +25,7 @@ from guardana.core.profile.model import Policy, Profile
 from guardana.core.registry import Registry
 from guardana.core.runner import Runner
 from guardana.core.target import ArtifactTarget
+from guardana.rules.supply_chain import _ast_names
 
 _SOURCE_FILES = 6
 # The one walk belongs to the target; every rule filters its listing.
@@ -142,3 +145,40 @@ def test_findings_survive_the_shared_read(repo: Path) -> None:
     assert "guardana.supply_chain.code_execution" in rules_fired
     assert "guardana.supply_chain.insecure_transport" in rules_fired
     assert not result.errors
+
+
+def _name_resolution_calls(root: Path, links: int) -> int:
+    """Count the calls into the shared name resolver while a scan reads one method chain."""
+    (root / "fluent.py").write_text(
+        "q = db" + "".join(f".step{i}(x)" for i in range(links)) + "\n", encoding="utf-8"
+    )
+    resolver_file = _ast_names.__file__
+    calls = 0
+
+    def count(frame: FrameType, event: str, _arg: object) -> None:
+        nonlocal calls
+        if event == "call" and frame.f_code.co_filename == resolver_file:
+            calls += 1
+
+    sys.setprofile(count)
+    try:
+        _run(root)
+    finally:
+        sys.setprofile(None)
+    return calls
+
+
+def test_name_resolution_grows_linearly_with_a_method_chain(tmp_path: Path) -> None:
+    # Fluent chains (`df.where(...).groupby(...)...`) are ordinary code; a resolver that
+    # revisits a receiver once per call above it, or twice per link, turns one long
+    # line into a scan that never finishes.
+    short_root, long_root = tmp_path / "short", tmp_path / "long"
+    short_root.mkdir()
+    long_root.mkdir()
+    short = _name_resolution_calls(short_root, 8)
+    long = _name_resolution_calls(long_root, 16)
+    assert short > 0, "the resolver was never called, so this measures nothing"
+    assert long <= 3 * short, (
+        f"{short} resolver calls for 8 links but {long} for 16 — name resolution is not "
+        f"linear in the chain"
+    )
