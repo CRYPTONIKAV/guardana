@@ -1,0 +1,269 @@
+"""Compressed pickles, decompressed as joblib picks a decompressor: by the leading bytes.
+
+`joblib.load` decompresses a file whatever it is named when its first bytes are a zlib,
+gzip, bz2, lzma, xz or lz4 header, or its own legacy `ZF` header. The stdlib decodes all but
+lz4. Every stream in the input is decoded back to back, as joblib's readers continue past the
+end of one, up to a bound on the output and on the input read.
+"""
+
+import bz2
+import lzma
+import re
+import zlib
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
+from typing import IO, Protocol
+
+_LEGACY_MAGIC = b"ZF"
+_LEGACY_LENGTH_DIGITS = len(f"{2**64:#x}")
+_LEGACY_HEADER = len(_LEGACY_MAGIC) + _LEGACY_LENGTH_DIGITS
+_STRONG_BZ2 = re.compile(rb"BZh[1-9]")
+_LZMA_MAX_DICTIONARY = 64 * 1024 * 1024
+"""The largest dictionary decoded, as large as the strongest xz preset writes."""
+_LZMA_MEMORY_LIMIT = 2 * _LZMA_MAX_DICTIONARY
+_BLOCK_BYTES = 8 * 1024
+"""Input fed to a decoder per call, as joblib reads it, so output before damage is kept."""
+MAX_STREAMS = 1024
+"""Compressed streams decoded back to back in one file; one is what joblib writes."""
+_CODEC_ERRORS = (zlib.error, lzma.LZMAError, OSError, EOFError, ValueError)
+
+
+class _Stream(Protocol):
+    """One compressed stream being decoded, whatever its codec."""
+
+    @property
+    def eof(self) -> bool:
+        """Whether the stream has ended."""
+        ...
+
+    @property
+    def unused_data(self) -> bytes:
+        """Input past the end of the stream."""
+        ...
+
+    @property
+    def needs_input(self) -> bool:
+        """Whether more output needs more input."""
+        ...
+
+    def feed(self, data: bytes, room: int) -> bytes:
+        """Decode `data` after what was fed before, returning at most `room` bytes."""
+        ...
+
+
+class _ZlibStream:
+    """A zlib or gzip stream, by its window bits."""
+
+    def __init__(self, wbits: int) -> None:
+        self._decoder = zlib.decompressobj(wbits)
+        self._tail = b""
+
+    @property
+    def eof(self) -> bool:
+        return self._decoder.eof
+
+    @property
+    def unused_data(self) -> bytes:
+        return self._decoder.unused_data
+
+    @property
+    def needs_input(self) -> bool:
+        return not self._tail
+
+    def feed(self, data: bytes, room: int) -> bytes:
+        out = self._decoder.decompress(self._tail + data, room)
+        self._tail = self._decoder.unconsumed_tail
+        return out
+
+
+class _BufferedStream:
+    """A bz2, lzma or xz stream, whose decoder keeps its own unread input."""
+
+    def __init__(self, decoder: bz2.BZ2Decompressor | lzma.LZMADecompressor) -> None:
+        self._decoder = decoder
+
+    @property
+    def eof(self) -> bool:
+        return self._decoder.eof
+
+    @property
+    def unused_data(self) -> bytes:
+        return self._decoder.unused_data
+
+    @property
+    def needs_input(self) -> bool:
+        return self._decoder.needs_input
+
+    def feed(self, data: bytes, room: int) -> bytes:
+        return self._decoder.decompress(data, room)
+
+
+def _lzma() -> _Stream:
+    return _BufferedStream(lzma.LZMADecompressor(memlimit=_LZMA_MEMORY_LIMIT))
+
+
+def _always(_head: bytes) -> bool:
+    return True
+
+
+def _never(_head: bytes) -> bool:
+    return False
+
+
+@dataclass(frozen=True, slots=True)
+class _Codec:
+    name: str
+    magic: bytes
+    start: Callable[[], _Stream] | None
+    """None for a codec the stdlib cannot decode."""
+    strong: Callable[[bytes], bool]
+    """Whether a head this codec rejects is still a compressed file rather than other bytes."""
+
+    refused: Callable[[bytes], bool] = _never
+    """Whether a head declares more than this scanner decodes, so it is not decoded at all."""
+
+
+def _large_dictionary(head: bytes) -> bool:
+    return int.from_bytes(head[1:5], "little") > _LZMA_MAX_DICTIONARY
+
+
+_CODECS = (
+    _Codec("zlib", b"\x78", lambda: _ZlibStream(zlib.MAX_WBITS), _never),
+    _Codec("gzip", b"\x1f\x8b", lambda: _ZlibStream(16 + zlib.MAX_WBITS), _always),
+    _Codec(
+        "bz2",
+        b"BZ",
+        lambda: _BufferedStream(bz2.BZ2Decompressor()),
+        lambda head: _STRONG_BZ2.match(head) is not None,
+    ),
+    _Codec("lzma", b"\x5d\x00", _lzma, _never, refused=_large_dictionary),
+    _Codec("xz", b"\xfd7zXZ", _lzma, _always),
+    _Codec("lz4", b"\x04\x22\x4d\x18", None, _always),
+)
+_LEGACY = _Codec("joblib-zlib", _LEGACY_MAGIC, lambda: _ZlibStream(zlib.MAX_WBITS), _never)
+
+
+@dataclass(frozen=True, slots=True)
+class Inflated:
+    """What decompressing one compressed file gave."""
+
+    codec: str
+    data: bytes | None
+    """The decompressed bytes, or None when this scanner cannot decompress the file."""
+
+    cut: bool = False
+    """Whether bytes past `data` were left undecoded at a bound, so what follows is unknown."""
+
+    shortfall: str | None = None
+    """Why bytes past `data` were not decoded, a bound or damage; None when all were."""
+
+    filled: bool = False
+    """Whether `data` stopped at the output bound, the one shortfall a size bound names."""
+
+
+def compressed(head: bytes) -> bool:
+    """Whether joblib would decompress a file that starts with `head`."""
+    return head.startswith(_LEGACY_MAGIC) or any(head.startswith(c.magic) for c in _CODECS)
+
+
+def _body_start(head: bytes) -> tuple[_Codec, int] | None:
+    if head.startswith(_LEGACY_MAGIC):
+        try:
+            int(head[len(_LEGACY_MAGIC) : _LEGACY_HEADER], 16)
+        except ValueError:
+            return None
+        return _LEGACY, _LEGACY_HEADER + (head[_LEGACY_HEADER : _LEGACY_HEADER + 1] == b" ")
+    codec = next((c for c in _CODECS if head.startswith(c.magic)), None)
+    return None if codec is None else (codec, 0)
+
+
+def _blocks(source: IO[bytes], start: int, input_limit: int, cut: list[bool]) -> Iterator[bytes]:
+    """Read `source` from `start` up to `input_limit` bytes; `cut[0]` says more was left."""
+    source.seek(start)
+    left = input_limit - start
+    while left > 0:
+        block = source.read(min(_BLOCK_BYTES, left))
+        if not block:
+            return
+        left -= len(block)
+        yield block
+    cut[0] = bool(source.read(1))
+
+
+@dataclass(slots=True)
+class _Drained:
+    """What decoding streams back to back gave, and why it stopped."""
+
+    out: bytearray
+    raised: bool = False
+    first_failed: bool = False
+    """Whether the codec rejected the very first block it was fed."""
+
+    streams: int = 1
+    too_many_streams: bool = False
+
+
+def _drain(start: Callable[[], _Stream], blocks: Iterator[bytes], limit: int) -> _Drained:
+    """Decode streams back to back to `limit + 1` bytes, keeping every call's output."""
+    drained = _Drained(bytearray())
+    out = drained.out
+    stream = start()
+    data = b""
+    calls = 0
+    try:
+        while len(out) <= limit:
+            if stream.eof:
+                data = stream.unused_data or next(blocks, b"")
+                if not data:
+                    break
+                if drained.streams >= MAX_STREAMS:
+                    drained.too_many_streams = True
+                    break
+                drained.streams += 1
+                stream = start()
+            elif stream.needs_input and not data:
+                data = next(blocks, b"")
+                if not data:
+                    break
+            calls += 1
+            out += stream.feed(data, limit + 1 - len(out))
+            data = b""
+    except _CODEC_ERRORS:
+        drained.raised = True
+        drained.first_failed = calls == 1
+    return drained
+
+
+def inflate(source: IO[bytes], head: bytes, *, limit: int, input_limit: int) -> Inflated | None:
+    """Decompress `source`, whose first bytes are `head`, as joblib would.
+
+    None when joblib would not decompress it, or when a header that is weak evidence of
+    compression is rejected with the first block fed to its codec: such bytes are read as
+    they are. The output stops at `limit` bytes, the input at `input_limit` and the streams
+    at `MAX_STREAMS`, each a `cut`; damage after some output keeps that output.
+    """
+    found = _body_start(head)
+    if found is None:
+        return None
+    codec, body = found
+    if codec.start is None or codec.refused(head):
+        return Inflated(codec.name, None)
+    input_cut = [False]
+    drained = _drain(codec.start, _blocks(source, body, input_limit, input_cut), limit)
+    data = bytes(drained.out[:limit])
+    if drained.first_failed and not codec.strong(head):
+        return None
+    if drained.raised and not data:
+        return Inflated(codec.name, None)
+    shortfall = None
+    if len(drained.out) > limit:
+        shortfall = f"larger than {limit} bytes once decompressed"
+    elif drained.too_many_streams:
+        shortfall = f"made of more than {MAX_STREAMS} compressed streams"
+    elif input_cut[0]:
+        shortfall = f"longer than {input_limit} bytes compressed"
+    elif drained.raised:
+        shortfall = f"damaged after {len(data)} decompressed bytes"
+    cut = shortfall is not None and not drained.raised
+    filled = len(drained.out) > limit
+    return Inflated(codec.name, data, cut=cut, shortfall=shortfall, filled=filled)

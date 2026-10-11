@@ -10,6 +10,7 @@ field redacted again and its target ref at `redacted` mode, and no kept exchange
 
 import re
 import threading
+import unicodedata
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -296,13 +297,24 @@ _REPORTER = _Kind(
 
 
 def sanitise_reason(text: str, secrets: Iterable[str] = ()) -> str:
-    """Make text from plugin code safe to print: secrets withheld, redacted, one line, bounded.
+    """Make text from plugin or collector code safe to print: one line, secrets gone, bounded.
 
-    Each of `secrets` is withheld as written, then the default redactor runs, then every
-    C0, DEL and C1 control character is dropped, then the length is bounded.
+    Every C0, DEL and C1 control character and every Unicode format character (bidi
+    controls, zero-width marks) is dropped first, so none can split a secret out of the
+    patterns' sight; then each of `secrets` is withheld, the default redactor runs, and
+    the length is bounded.
     """
-    redacted = EvidenceRedactor(secrets=secrets).redact_text(text)
-    return bounded_reason(_C0_DEL_C1.sub("", redacted))
+    known = tuple(secrets)
+    withheld = (*known, *(_printable(value) for value in known))
+    return bounded_reason(EvidenceRedactor(secrets=withheld).redact_text(_printable(text)))
+
+
+def _printable(text: str) -> str:
+    """Drop every C0, DEL and C1 control character and every Unicode format character."""
+    text = _C0_DEL_C1.sub("", text)
+    if text.isascii():
+        return text
+    return "".join(char for char in text if unicodedata.category(char) != "Cf")
 
 
 def _describe(entry_point: InstalledEntryPoint) -> str:

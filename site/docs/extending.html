@@ -286,7 +286,7 @@ only for a rule that grades in its own code and stamps verdicts with its own id,
 </tr>
 <tr>
 <td><code>Rule.not_applicable_to(target)</code></td>
-<td>Return why the rule has nothing to check on <code>target</code> as a non-empty string, or <code>None</code>. The run and the plan record the rule as skipped <code>not_applicable</code>, never as a check that ran. Any other return (<code>False</code>, <code>&quot;&quot;</code>) is an error naming the hook and what it returned, and the rule runs.</td>
+<td>Return why the rule has nothing to check on <code>target</code> as a non-empty string, or <code>None</code>. The run and the plan record the rule as skipped <code>not_applicable</code>, never as a check that ran. Any other return (<code>False</code>, <code>&quot;&quot;</code>) is an error naming the hook and what it returned, and the rule runs. A hook that raises is also an error naming the hook and the exception, recorded in the run and the plan, and the rule runs. Only rules the profile selects are asked.</td>
 </tr>
 <tr>
 <td><code>raise NotOffered(detail, missing=(...))</code></td>
@@ -534,8 +534,8 @@ class MyTarget(Target):
         return self._sources[path]
 
     def unread_sources(self) -&gt; tuple[UnreadSource, ...]:
-        # A file you were *prevented* from reading (too large, unopenable) —
-        # the runner turns these into `errors`: a check that did not run.
+        # A file that yielded no tree (too large, unopenable, undecodable,
+        # unparseable) — the runner turns these into `errors`: a check that did not run.
         return tuple(self._unread)
 </code></pre>
 <p><code>ref</code> is printed in messages and saved in the run document, SARIF and the collector
@@ -890,7 +890,7 @@ which no rule ran — so a format is tried on the runs it most needs to describe
 </main>
 </div>
 <footer class="foot"><div class="bar">
-<span class="who">Guardana 1.0.0rc1 · Apache-2.0 ·
+<span class="who">Guardana 1.0.0rc2 · Apache-2.0 ·
 maintained by Konrad Karauda</span>
 <a href="https://github.com/guardana/guardana/blob/main/docs/extending.md">Edit this page on GitHub</a>
 <a href="https://github.com/guardana/guardana">github.com/guardana</a>

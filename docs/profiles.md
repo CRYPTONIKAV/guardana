@@ -51,7 +51,10 @@ rules:
   paths_exclude: ["data/*", "archive"]  # optional; globs (matched relative to the
                                          # scan root) of files/dirs to skip. A
                                          # `.guardanaignore` file at the root adds
-                                         # more, one glob per line.
+                                         # more, one glob per line. Exclude here a
+                                         # `.py` file the scanning interpreter cannot
+                                         # decode or parse; otherwise it leaves the
+                                         # run indeterminate.
 
 plugins:                        # optional; which installed plugins a run imports
   mode: allowlist               # all | builtins | allowlist | disabled
@@ -267,8 +270,8 @@ that.
 An unknown block name under `evaluators:`, a key a block does not take, and a block
 that is not a mapping are a `ProfileError` when the profile loads (exit `3`), and a
 profile built in Python is held to the same keys when its judges are wired. A rule
-that names an unconfigured evaluator is skipped visibly in the run summary — the gate
-never quietly weakens.
+that names an unconfigured evaluator records a `RuleLoadError` (`unknown evaluator`)
+error in the run instead of grading — the gate never quietly weakens.
 
 ## Rule-specific configuration
 
@@ -385,9 +388,11 @@ recording) accepts a rate, as it accepts `max_requests`. [`guardana plan
 probe`](usage-plan.md#checking-against-a-budget) states the wall time a rate needs and
 refuses a `max_duration` below it.
 
-A token ceiling is held only while replies report their token counts. The first
-reply that leaves out a count a ceiling depends on stops the run as an exhausted
-budget, exit `6`, because no later request could be measured against it.
+A token ceiling is held only while replies report their token counts. A token count
+below zero is read as not reported, because adding a negative count to the sum would
+let every later request pass the ceiling. The first reply that leaves out a count a
+ceiling depends on stops the run as an exhausted budget, exit `6`, because no later
+request could be measured against it.
 
 **The ceiling belongs to the run, not to a pass of it.** `probe` runs each
 canary-planting rule against a target of its own — the marker has to be in that
