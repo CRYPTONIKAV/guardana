@@ -28,13 +28,14 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from guardana.core.formats import FormatError
+from guardana.core.formats import FormatError, read_gguf_metadata
 from guardana.core.plugins import PluginMode, PluginTrust
 from guardana.core.registry import Registry
 from guardana.core.rule import Rule, RuleContext
 from guardana.core.rule.errors import RuleError
 from guardana.core.target import ArtifactTarget, TargetKind
 from guardana.rules.supply_chain import chat_template as chat_template_module
+from guardana.rules.supply_chain._reading import read_bytes_bounded, read_text_prefix
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -101,6 +102,17 @@ _MAGICS = (
     b"<PMML>",
 )
 
+_NAMES_BY_SUFFIX = {
+    ".json": "tokenizer_config.json",
+    ".jinja": "chat_template.jinja",
+    ".j2": "chat_template.j2",
+}
+"""Names the chat-template rule actually opens.
+
+It reads `.json` only under a config name and `.jinja`/`.j2` only under a
+`chat_template` stem, so `model.json` and `model.jinja` never reach its reader.
+"""
+
 
 def _artifact_rules() -> tuple[Rule, ...]:
     return tuple(
@@ -122,7 +134,11 @@ _RULES = _artifact_rules()
     suffix=st.sampled_from(_HOSTILE_SUFFIXES),
 )
 def test_no_artifact_rule_raises_on_bytes_nobody_wrote(
-    tmp_path: Path, magic: bytes, body: bytes, suffix: str
+    tmp_path: Path,
+    magic: bytes,
+    body: bytes,
+    suffix: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A rule that raises is coverage the scan reported and did not have.
 
@@ -130,7 +146,28 @@ def test_no_artifact_rule_raises_on_bytes_nobody_wrote(
     failure this catches is the scan going `indeterminate` because a struct
     unpacked short, and the file that did it being one an attacker uploaded.
     """
-    (tmp_path / f"model{suffix}").write_bytes(magic + body)
+    # The chat-template rule never opens `model.json` or `model.jinja`: it reads
+    # `.json` only under a config name and `.jinja`/`.j2` only under a
+    # `chat_template` stem. Without the real names the reader below is never
+    # reached and this test proves nothing about it.
+    name = _NAMES_BY_SUFFIX.get(suffix, f"model{suffix}")
+    (tmp_path / name).write_bytes(magic + body)
+    # Counters close over the module-level originals, not over the attribute on
+    # `chat_template_module`: `monkeypatch` is function-scoped, so reading the
+    # attribute here would pick up the previous example's wrapper and nest one
+    # frame per example.
+    reached: list[str] = []
+
+    def counting_text_prefix(path: Path, **kwargs: object) -> object:
+        reached.append(path.name)
+        return read_text_prefix(path, **kwargs)  # type: ignore[arg-type]
+
+    def counting_bytes(path: Path, *args: object, **kwargs: object) -> object:
+        reached.append(path.name)
+        return read_bytes_bounded(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(chat_template_module, "read_text_prefix", counting_text_prefix)
+    monkeypatch.setattr(chat_template_module, "read_bytes_bounded", counting_bytes)
     target = ArtifactTarget(tmp_path)
     ctx = RuleContext()
 
@@ -143,6 +180,8 @@ def test_no_artifact_rule_raises_on_bytes_nobody_wrote(
             continue
         except Exception as exc:
             pytest.fail(f"{rule.meta.id} raised {type(exc).__name__} on {suffix}: {exc}")
+    if suffix in _NAMES_BY_SUFFIX:
+        assert name in reached, f"no example with suffix {suffix} reached the chat-template reader"
 
 
 @settings(
@@ -173,12 +212,14 @@ def test_a_declared_length_larger_than_the_file_does_not_hang_or_allocate(
     (tmp_path / "model.gguf").write_bytes(gguf_header + actual)
     reached: list[Path] = []
     reader_errors: list[str] = []
-    real_reader = chat_template_module.read_gguf_metadata
 
     def counting_reader(path: Path, **kwargs: object) -> object:
+        # Closes over the module-level original: `monkeypatch` is
+        # function-scoped, so reading the attribute here would pick up the
+        # previous example's wrapper and nest one frame per example.
         reached.append(path)
         try:
-            return real_reader(path, **kwargs)  # type: ignore[arg-type]
+            return read_gguf_metadata(path, **kwargs)  # type: ignore[arg-type]
         except FormatError as exc:
             reader_errors.append(str(exc))
             raise
@@ -197,10 +238,10 @@ def test_a_declared_length_larger_than_the_file_does_not_hang_or_allocate(
             pytest.fail(f"{rule.meta.id} raised {type(exc).__name__}: {exc}")
     elapsed = time.monotonic() - started
 
-    assert reached, "no example reached the GGUF reader past the magic check"
-    assert not any("bad magic" in message for message in reader_errors), (
-        "input carries valid magic: a magic rejection means the header regressed"
-    )
+    assert reached, "no example reached the GGUF reader"
+    assert not any(
+        "bad magic" in message or "unsupported GGUF version" in message for message in reader_errors
+    ), "input carries a full valid header: a magic or version rejection means it regressed"
     assert elapsed < _DEADLINE_SECONDS, (
         f"scanning a file that declares {declared} bytes took {elapsed:.1f}s — "
         f"a crafted length must not become a hang"
@@ -221,20 +262,19 @@ def test_the_text_parsers_survive_arbitrary_unicode(
     """
     for name in ("tokenizer_config.json", "chat_template.jinja", "README.txt", "loader.py"):
         (tmp_path / name).write_text(text, encoding="utf-8", errors="surrogatepass")
-    # Counters on the public reader seams: the config reader must open
-    # tokenizer_config.json and the template reader chat_template.jinja, or the
-    # test below proves nothing about either.
+    # Counters on the reader seams in the private `_reading` module: the config
+    # reader must open tokenizer_config.json and the template reader
+    # chat_template.jinja, or the test below proves nothing about either.
+    # They close over the module-level originals (see the GGUF test above).
     reached: list[str] = []
-    real_text_prefix = chat_template_module.read_text_prefix
-    real_bytes = chat_template_module.read_bytes_bounded
 
     def counting_text_prefix(path: Path, **kwargs: object) -> object:
         reached.append(path.name)
-        return real_text_prefix(path, **kwargs)  # type: ignore[arg-type]
+        return read_text_prefix(path, **kwargs)  # type: ignore[arg-type]
 
     def counting_bytes(path: Path, *args: object, **kwargs: object) -> object:
         reached.append(path.name)
-        return real_bytes(path, *args, **kwargs)  # type: ignore[arg-type]
+        return read_bytes_bounded(path, *args, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(chat_template_module, "read_text_prefix", counting_text_prefix)
     monkeypatch.setattr(chat_template_module, "read_bytes_bounded", counting_bytes)
