@@ -498,8 +498,11 @@ exit &quot;$status&quot;
 <h2 id="forwarding-to-a-collector">Forwarding to a collector</h2>
 <pre><code class="language-bash">guardana scan . --reporter server://https://collector.example.com
 </code></pre>
-<p>Findings are POSTed to the collector after being printed locally — this
-never blocks the local exit-code gate. See
+<p>Findings are POSTed to the collector after being printed locally — by default
+a collector that refuses or cannot be reached is a warning and changes no exit
+code. A profile that sets <a href="profiles.html#delivery"><code>delivery.required</code></a> prints
+an unacknowledged delivery as an <code>error:</code> line, and a final <code>0</code>, <code>1</code> or <code>2</code>
+becomes <code>8</code> (see <a href="exit-codes.html"><code>exit-codes.md</code></a>). See
 <a href="architecture.html#the-coreserver-boundary"><code>architecture.md</code></a>.</p>
 <h2 id="saving-a-run-for-comparison">Saving a run for comparison</h2>
 <p><code>--output &lt;path&gt;</code> writes the report to a file instead of stdout. With

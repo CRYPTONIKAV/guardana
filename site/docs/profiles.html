@@ -577,8 +577,8 @@ that.</p>
 <p>An unknown block name under <code>evaluators:</code>, a key a block does not take, and a block
 that is not a mapping are a <code>ProfileError</code> when the profile loads (exit <code>3</code>), and a
 profile built in Python is held to the same keys when its judges are wired. A rule
-that names an unconfigured evaluator is skipped visibly in the run summary — the gate
-never quietly weakens.</p>
+that names an unconfigured evaluator records a <code>RuleLoadError</code> (<code>unknown evaluator</code>)
+error in the run instead of grading — the gate never quietly weakens.</p>
 <h2 id="rule-specific-configuration">Rule-specific configuration</h2>
 <p><code>rule_config</code> (a top-level key, keyed by rule id) is threaded into a rule's
 <code>RuleContext</code> at run time, letting a rule read profile-supplied configuration

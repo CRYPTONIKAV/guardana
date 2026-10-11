@@ -267,8 +267,8 @@ that.
 An unknown block name under `evaluators:`, a key a block does not take, and a block
 that is not a mapping are a `ProfileError` when the profile loads (exit `3`), and a
 profile built in Python is held to the same keys when its judges are wired. A rule
-that names an unconfigured evaluator is skipped visibly in the run summary — the gate
-never quietly weakens.
+that names an unconfigured evaluator records a `RuleLoadError` (`unknown evaluator`)
+error in the run instead of grading — the gate never quietly weakens.
 
 ## Rule-specific configuration
 

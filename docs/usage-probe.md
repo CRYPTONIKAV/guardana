@@ -743,8 +743,8 @@ alike ([exit codes](exit-codes.md)).
 The `llm_judge` and `guard` evaluators need a model of their own, wired from
 an `evaluators:` block in `guardana.yaml` — see
 [`profiles.md`](profiles.md#config-wired-evaluators-llm_judge-and-guard). With
-no block configured, a rule that names one of them is **skipped visibly** in
-the run summary rather than silently passed. `plan probe` prices their calls before
+no block configured, a rule that names one of them records a `RuleLoadError`
+(`unknown evaluator`) error in the run rather than grading or silently passing. `plan probe` prices their calls before
 the run ([`usage-plan.md`](usage-plan.md#pricing-judge-calls)), and the saved run
 records what they spent in `usage.judge` ([`usage-run.md`](usage-run.md#what-a-run-costs)).
 
