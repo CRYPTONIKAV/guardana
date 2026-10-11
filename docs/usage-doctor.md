@@ -88,10 +88,12 @@ exits `3`, as the run would. Useful as an early pipeline step: a typo in
 `guardana.yaml` should fail in a second rather than after a probe has spent its
 budget finding out.
 
-Both `config validate` and `config explain` take `--profile PATH` (default none —
-the built-in default profile: a path to a `guardana.yaml` policy file) and
-`--preset [ci|pre-training|monitor|release]` (default none — a named policy
-preset, mutually exclusive with `--profile`).
+Both `config validate` and `config explain` take a policy selection flag:
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--profile PATH` | none (built-in default profile) | A `guardana.yaml` policy file |
+| `--preset [ci\|pre-training\|monitor\|release]` | none | Named policy preset; mutually exclusive with `--profile` |
 
 ## `config explain` — what is actually in force
 

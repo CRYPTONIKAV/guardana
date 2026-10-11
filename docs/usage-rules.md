@@ -17,8 +17,7 @@ Pass `--rules <dir>` to include YAML rules, as with `scan` and `probe`. Files th
 
 ## Flags
 
-`rules` discovers plugins the same way `scan`/`probe` do, so it takes the same
-plugin-trust flags:
+`rules` takes a layer filter and the same plugin-trust flags `scan`/`probe` do:
 
 | Flag | Default | Meaning |
 |---|---|---|

@@ -135,10 +135,14 @@ Measured
 
 ## Flags
 
+`--profile`/`--preset`/`--rules`/`--trials` and the budget flags are covered in
+the sections above and below; the remaining flags are:
+
 | Flag | Default | Meaning |
 |---|---|---|
 | `--concurrency INTEGER` | `4` | How many rules may grade at once |
 | `--plugins [all\|builtins\|allowlist\|disabled]` | `builtins`, or the profile's `plugins:` | Which installed plugins to load — same meaning as on `probe` |
+| `--allow-plugin TEXT` | none | Distribution to trust; repeatable, needs `--plugins allowlist` |
 
 ## Traffic and budgets
 
