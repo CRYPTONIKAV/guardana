@@ -299,7 +299,7 @@ expect:
 <td><code>evaluator</code></td>
 <td>yes</td>
 <td>string</td>
-<td>The evaluator id this rule's prompts are graded with, e.g. <code>keyword</code>, <code>canary</code>, or an evaluator your own package registers, e.g. <code>acme.severity_classifier</code>. A rule using <code>canary</code> must set <code>expect.canary</code>, and one using <code>llm_judge</code> must set <code>expect.goal</code> — the loader rejects it otherwise. <code>llm_judge</code> and <code>guard</code> also need an <code>evaluators:</code> block in <code>guardana.yaml</code> telling Guardana where their model lives (see <a href="profiles.html#config-wired-evaluators-llm_judge-and-guard"><code>profiles.md</code></a>); without it, the rule is skipped visibly.</td>
+<td>The evaluator id this rule's prompts are graded with, e.g. <code>keyword</code>, <code>canary</code>, or an evaluator your own package registers, e.g. <code>acme.severity_classifier</code>. A rule using <code>canary</code> must set <code>expect.canary</code>, and one using <code>llm_judge</code> must set <code>expect.goal</code> — the loader rejects it otherwise. <code>llm_judge</code> and <code>guard</code> also need an <code>evaluators:</code> block in <code>guardana.yaml</code> telling Guardana where their model lives (see <a href="profiles.html#config-wired-evaluators-llm_judge-and-guard"><code>profiles.md</code></a>); without it, the rule's run records a <code>RuleLoadError</code> (<code>unknown evaluator</code>) error instead of grading.</td>
 </tr>
 <tr>
 <td><code>requires</code></td>

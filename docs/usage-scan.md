@@ -317,8 +317,11 @@ exit "$status"
 guardana scan . --reporter server://https://collector.example.com
 ```
 
-Findings are POSTed to the collector after being printed locally — this
-never blocks the local exit-code gate. See
+Findings are POSTed to the collector after being printed locally — by default
+a collector that refuses or cannot be reached is a warning and changes no exit
+code. A profile that sets [`delivery.required`](profiles.md#delivery) prints
+an unacknowledged delivery as an `error:` line, and a final `0`, `1` or `2`
+becomes `8` (see [`exit-codes.md`](exit-codes.md)). See
 [`architecture.md`](architecture.md#the-coreserver-boundary).
 
 ## Saving a run for comparison
