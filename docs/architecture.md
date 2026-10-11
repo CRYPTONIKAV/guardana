@@ -320,8 +320,8 @@ class Runner:
 For each registered rule: skip it if `target.kind` doesn't match
 `meta.target_kind`, or the profile's `Policy.matches(rule_id)` excludes it;
 skip it (recording it under `rules_skipped`) if the target can't satisfy
-`meta.required_capabilities`; otherwise run it, catching any `Exception` per
-rule (not `KeyboardInterrupt` or `SystemExit`) and recording it on the result's
+`meta.required_capabilities`; otherwise run it, catching any `Exception` or
+`SystemExit` per rule (not `KeyboardInterrupt`) and recording it on the result's
 `errors` channel, so one bad rule can't abort the whole scan and the gate fails on
 it by default ([when a rule raises](writing-rules.md#what-happens-when-your-rule-raises)). Findings whose verdict is
 `inconclusive` are partitioned onto the result's `unverified` channel rather

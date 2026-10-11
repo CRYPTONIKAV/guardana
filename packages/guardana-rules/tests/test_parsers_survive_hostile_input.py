@@ -55,9 +55,13 @@ _HOSTILE_SUFFIXES = (
     ".onnx",
     ".safetensors",
     ".h5",
+    ".hdf",
+    ".weights",
+    ".tf",
     ".keras",
     ".pmml",
     ".pb",
+    ".pbtxt",
     ".npy",
     ".npz",
     ".sav",
@@ -73,6 +77,12 @@ _HOSTILE_SUFFIXES = (
     ".jinja",
     ".txt",
     ".py",
+    ".pkl.gz",
+    ".pkl.z",
+    ".joblib.xz",
+    ".pickle.bz2",
+    ".pkl.lzma",
+    ".joblib.lz4",
 )
 """Every extension a built-in artifact rule opens and reads the contents of.
 
@@ -96,6 +106,13 @@ _MAGICS = (
     b"\x93NUMPY\x01\x00\x40\x00{'descr': '|O', 'fortran_order': False, 'shape': (1,)}",
     b'{"__metadata__":',
     b"<PMML>",
+    b'node { op: "Write\\',  # a SavedModel text graph, cut inside an escaped op name
+    b"\x1f\x8b\x08\x00",  # gzip
+    b"\x78\x9c",  # zlib
+    b"BZh9",
+    b"\xfd7zXZ\x00",
+    b"\x5d\x00\x00\x80\x00",  # lzma
+    b"ZF0x40               ",  # joblib's legacy zlib header
 )
 
 
@@ -127,7 +144,9 @@ def test_no_artifact_rule_raises_on_bytes_nobody_wrote(
     failure this catches is the scan going `indeterminate` because a struct
     unpacked short, and the file that did it being one an attacker uploaded.
     """
-    (tmp_path / f"model{suffix}").write_bytes(magic + body)
+    # A SavedModel graph is read only under its own name in its text form.
+    stem = "saved_model" if suffix == ".pbtxt" else "model"
+    (tmp_path / f"{stem}{suffix}").write_bytes(magic + body)
     target = ArtifactTarget(tmp_path)
     ctx = RuleContext()
 
@@ -191,7 +210,13 @@ def test_the_text_parsers_survive_arbitrary_unicode(tmp_path: Path, text: str) -
     These rules exist *because* text can carry what a reader cannot see, so the
     input they are pointed at is exactly the input most likely to be malformed.
     """
-    for name in ("config.json", "chat_template.jinja", "README.txt", "loader.py"):
+    for name in (
+        "config.json",
+        "chat_template.jinja",
+        "README.txt",
+        "loader.py",
+        "saved_model.pbtxt",
+    ):
         (tmp_path / name).write_text(text, encoding="utf-8", errors="surrogatepass")
     target = ArtifactTarget(tmp_path)
     ctx = RuleContext()
@@ -228,5 +253,6 @@ def test_the_corpus_covers_every_extension_a_built_in_rule_opens(tmp_path: Path)
             list(rule.run(target, RuleContext()))
 
     assert asked, "no rule asked for a suffix, so this test is measuring nothing"
-    missing = sorted(asked - set(_HOSTILE_SUFFIXES))
+    fed = {Path(f"model{suffix}").suffix for suffix in _HOSTILE_SUFFIXES}
+    missing = sorted(asked - fed)
     assert not missing, f"extensions a rule reads and the corpus never feeds it: {missing}"

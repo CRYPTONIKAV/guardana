@@ -343,6 +343,22 @@ def test_the_sanitiser_withholds_each_secret_as_written_and_redacts_known_shapes
     assert "sk-" + "A" * 20 not in cleaned
 
 
+@pytest.mark.parametrize("hidden", ["\x00", "\x07", "\x1b", "\u200b", "\u202e"])
+def test_a_control_or_format_character_inside_a_secret_does_not_hide_it(hidden: str) -> None:
+    split = _SECRET[:6] + hidden + _SECRET[6:]
+    shaped = "gh" + "p_" + "ABCD" + hidden + "EFGH" * 5
+
+    cleaned = sanitise_reason(f"echo {split} and {shaped}", secrets=(_SECRET,))
+
+    assert _SECRET[6:] not in cleaned
+    assert "EFGH" not in cleaned
+    assert hidden not in cleaned
+
+
+def test_the_sanitiser_drops_format_characters() -> None:
+    assert sanitise_reason("a\u202eb\u200bc\ufeffd\u2066e") == "abcde"
+
+
 def test_the_sanitiser_bounds_a_long_reason() -> None:
     cleaned = sanitise_reason("x" * 5000)
 

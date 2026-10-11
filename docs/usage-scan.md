@@ -72,6 +72,18 @@ symlinked file whose target lies inside the scanned directory is listed and read
 scanned directory itself may be reached through a symlink, and a single file named on the
 command line is read even when it is a symlink.
 
+## Python files the scan cannot read
+
+A `.py` file is decoded the way Python decodes a module it runs, so a UTF-8 byte order
+mark or a PEP 263 coding line (`# -*- coding: latin-1 -*-`) is honoured. A file that is
+too large, cannot be opened, cannot be decoded, or does not parse under the Python
+running the scan (syntax from a newer Python, a Python 2 file, a null byte) is not
+skipped: it is recorded as a source the scan could not read, so the run records an
+error, and every rule that reads Python reports it as an inconclusive "not scanned"
+result with an `unexamined_component` shortfall. The run is `indeterminate` (exit `2`)
+whenever such a rule runs, even with `fail_on_error: false`. Scan with a Python that parses the file, or exclude it
+with `.guardanaignore` or `rules.paths_exclude`.
+
 ## Model files no rule reads
 
 Every model file the scan observes must be read by a rule that ran. One that no rule
@@ -84,13 +96,46 @@ A model or notebook a rule tried to read and could not is a shortfall of the sam
 named by its file: a pickle, archive or graph that does not parse, a pickle import whose
 name the scanner cannot resolve, a model file that cannot be opened (a `.bin` included,
 since it may be a model), a safetensors file whose header is malformed, a file cut by a
-read bound, a PMML document past the bound, a notebook that is not JSON. The rule reports two things for it: an inconclusive
-"not scanned" result on the unverified channel, and an `unexamined_component` shortfall
-whose name is the file's path and whose detail reads `<rule id> could not read it:
-<reason>`. The file is not named a second time by format. With no switch over it, a scan
-holding one such file is `indeterminate` (exit `2`) under every preset, `ci` included,
-unless a finding fails it. A notebook cell that does not parse as Python is not one: the
-notebook was read, and the cell is reported as an unverified result only.
+read bound, a PMML document past the bound, a notebook that is not JSON, a notebook whose
+`kernelspec.language` or `language_info.name` is not Python. The rule reports
+two things for it: an inconclusive "not scanned" result on the unverified channel, and an
+`unexamined_component` shortfall whose name is the file's path and whose detail reads
+`<rule id> could not read it: <reason>`. The file is not named a second time by format.
+With no switch over it, a scan holding one such file is `indeterminate` (exit `2`) under
+every preset, `ci` included, unless a finding fails it. A notebook cell that does not
+parse as Python is not one: the notebook was read, and the cell is reported as an
+unverified result only. A cell too complex for the Python parser to hold is inconclusive
+and a shortfall. The IPython line magics `%time`, `%timeit`, `%prun` and `%debug`,
+and the first line of the `%%timeit`, `%%prun` and `%%debug` cell magics, are read as
+Python after their options are removed; the bodies of `%%time`, `%%capture`, `%%writefile`
+and `%%script python` cells are read as Python. `%system` and `%sx` lines are read as shell
+escapes, like `!`, and so is the command an `%alias` defines, wherever the alias is called.
+`%%bash`, `%%sh`, `%%sx`, `%%system`, `%%!` and `%%script` with a shell are shell cells,
+whose magic is found on the first non-blank line. A shell cell is read as the shell joins
+it: a line ending in a backslash, `|`, `&&` or `||` continues on the next, and a `!` or
+`%` line ending in a backslash continues as IPython joins it. Magics that only change
+interpreter state (`%matplotlib`, `%config`, `%env`, `%cd`, `%autoreload`, `%load_ext`
+of IPython's own `autoreload` or `storemagic`, and the like) are skipped. Any other magic
+is not skipped: `%run`, `%load_ext`, `%pip`, `%conda`, a magic the rule does not know,
+and a cell magic that runs another language (`%%perl`, `%%R`, `%%html`, `%%script perl`)
+make the cell inconclusive and add an `unexamined_component` shortfall naming the notebook
+and the magic, and a foreign cell's body is never read as Python. A magic whose statement
+does not parse makes the cell inconclusive. Each `{…}` expression IPython evaluates
+inside a `!` line or a magic's arguments (`{{` and `}}` are literal braces) is scanned as
+Python with the rest of the cell; one that is not Python syntax, such as an `awk`
+program, evaluates nothing, since IPython then runs the command unexpanded.
+`target = !cmd` and `target = %magic` are read as the bare form. A cell that is a single
+line starting with a line magic's name (`run x.py`, `pip install x`, `ls -la`) is read as
+that magic, as IPython's automagic runs it, unless the rest starts with `=` or `,` or an
+earlier cell, a builtin or a keyword binds the name; after `%rehashx`, such a line
+starting with any other unbound word is inconclusive, since it may name an executable.
+A magic defined with `%alias_magic` is read as its target. Calls on the IPython object,
+under any name `get_ipython` is imported or assigned as, are read as the escape, magic
+or cell they spell (`system`, `getoutput`, `run_line_magic`, `run_cell_magic`,
+`run_cell`, `run_cell_async`, a magic returned by `find_line_magic` and called, the same
+methods reached through `getattr`). Its namespaces, history and display data are inert.
+Any other method, an argument that is not a literal, or a method taken without being
+called is reported unscanned: inconclusive and a shortfall.
 
 Shortfall names are relative to the working directory, as finding locations are, and the
 scan root is removed from their detail, so a saved run names the same file on a laptop
@@ -101,17 +146,45 @@ and in CI. A format name (`tflite`) is not a path and stays as it is.
 | `.pkl`, `.pickle`, `.dill`, `.joblib`, `.pt`, `.pth`, `.ckpt`, `.ptl`, `.pdparams`, `.pth.tar`, `.pt.tar` | `guardana.supply_chain.pickle_opcode` |
 | `.npy`, and each `.npy` inside a `.npz`, or a `.bin`, `.sav`, `.p` or `.model` that starts with the NPY magic: an object array holds a pickle stream, a numeric one cannot | `guardana.supply_chain.pickle_opcode` |
 | `.bin` whose first bytes are a zip or a pickle stream (`pytorch_model.bin`); `.sav`, `.p` or `.model` whose first bytes are a pickle stream | `guardana.supply_chain.pickle_opcode` |
+| a compressed pickle or checkpoint (`.pkl`, `.pickle` or `.joblib` followed by `.gz`, `.z`, `.xz`, `.bz2` or `.lzma`; `.joblib.lz4`; `.pt.gz`; `.pth.gz`) | `guardana.supply_chain.pickle_opcode` |
 | `.onnx` | `guardana.supply_chain.onnx_graph` |
-| `.keras`, `.h5`, `.hdf5` | `guardana.supply_chain.keras_lambda` |
+| `.keras`, `.h5`, `.hdf5`; a `.bin`, `.model`, `.hdf`, `.weights` or `.tf` that holds the HDF5 signature at its start or after a userblock; a `config.json` beside `metadata.json` or `model.weights.h5` (an unzipped Keras model directory) | `guardana.supply_chain.keras_lambda` |
 | `.gguf` | `guardana.supply_chain.chat_template` |
 | `.safetensors`, `.pmml` | `guardana.supply_chain.model_format` |
-| `.tflite`, `.mar`, `.nemo`, `.llamafile`, `model.tar.gz`, a compressed pickle or checkpoint (`.pkl`, `.pickle` or `.joblib` followed by `.gz`, `.z`, `.xz`, `.bz2` or `.lzma`; `.joblib.lz4`; `.pt.gz`; `.pth.gz`), a `.bin` that starts like GGUF or GGML | no built-in rule |
+| `saved_model.pb`, `saved_model.pbtxt` (the text form TensorFlow loads when there is no `.pb`; its `op` values are decoded as protobuf decodes them, and one that cannot be decoded is a shortfall) | `guardana.supply_chain.saved_model_ops` |
+| `.tflite`, `.mar`, `.nemo`, `.llamafile`, `model.tar.gz`, a `.bin` that starts like GGUF or GGML | no built-in rule |
 
 A `.bin`, `.sav`, `.p` or `.model` whose first bytes match none of those is not listed as a
-model. `pickle_opcode` also reads a `.tar` or `.zip` by its content: the members named like
-a model (`pickle`, `data.pkl`, `*.pt`, `*.pth.tar`), and every member of a `.tar` that is in
-fact a zip; a member named as a model that is itself an archive is a coverage shortfall,
-and one `pickle.load` would read is still read as a stream. Any file `pickle_opcode` reads
+model. The HDF5 signature is looked for where the HDF5 library looks: at the start and
+after a userblock of 512, 1024, 2048 bytes and so on, up to the end of the file. The
+model config is read from the first 16 MiB, so a file whose signature or config lies past
+that is reported as not scanned rather than clean. A file with no suffix is not sniffed,
+so an HDF5 model saved without one is neither listed nor read. `pickle_opcode` also reads a `.tar` or `.zip` by its content: the members named like
+a model (`pickle`, `data.pkl`, `*.pt`, `*.pth.tar`, `*.pkl.gz`), every member of a `.zip`
+whose first bytes are an NPY array or a pickle header whatever its name, and every member
+of a `.tar` that is in fact a zip; a member named as a model that is itself an archive is a coverage
+shortfall, and one `pickle.load` would read is still read as a stream. A member named as a
+model it does not open inside an archive (`*.safetensors`, `*.gguf`, `*.onnx`, `*.keras`,
+`model.tar.gz` and the rest of the last row above, and HDF5 files (`*.h5`, `*.hdf5`, `*.hdf`, `*.weights`, `*.tf`) and a Keras directory's
+`config.json` or `model.weights.h5` inside a model archive, though not inside a plain
+`.zip` or `.tar`, where HDF5 is as often a dataset) is a
+coverage shortfall that names it; a zip member counts under its directory name and under an
+Info-ZIP Unicode Path alike. A file or member it reads whose first bytes are a zlib, gzip,
+bz2, lzma, xz or lz4 header, or joblib's own legacy one, is decompressed first, as
+`joblib.load` does whatever the name, up to 64 MiB per file or member, 512 MiB per archive
+and 1,024 streams back to back; past a bound, damaged part-way (what was decompressed
+before the damage is still read), or in lz4 or another form it cannot decompress, it is a
+coverage shortfall. A zip whose
+central directory is not where its end record declares it, as with bytes before the zip
+or two directories, is a coverage shortfall rather than read, because zip readers would
+disagree on its members, and so is a member stored with two different sizes or whose local
+header disagrees with its directory entry, and a pickle read that crosses the end of a
+frame; a `.zip` is found by its end record wherever the zip data starts, and is
+also read as a stream when its first bytes are not a zip's,
+and a file that starts with an end record is opened as a zip, as `np.load` does. In a
+legacy tar, the `storages` and `tensors` members are read as `torch.load` reads them, a
+pickle before each run of raw tensor bytes; a layout it cannot follow is a coverage
+shortfall. Any file `pickle_opcode` reads
 that does not start as a zip and whose first 512-byte block is a tar header (`ustar`, or
 the older v7 form without `ustar` magic) is read as a tar, whatever it is named, because
 `torch.load` opens a legacy `torch.save` file that way. The same file is also read as the
@@ -244,8 +317,11 @@ exit "$status"
 guardana scan . --reporter server://https://collector.example.com
 ```
 
-Findings are POSTed to the collector after being printed locally — this
-never blocks the local exit-code gate. See
+Findings are POSTed to the collector after being printed locally — by default
+a collector that refuses or cannot be reached is a warning and changes no exit
+code. A profile that sets [`delivery.required`](profiles.md#delivery) prints
+an unacknowledged delivery as an `error:` line, and a final `0`, `1` or `2`
+becomes `8` (see [`exit-codes.md`](exit-codes.md)). See
 [`architecture.md`](architecture.md#the-coreserver-boundary).
 
 ## Saving a run for comparison

@@ -486,8 +486,8 @@ class Runner:
 <p>For each registered rule: skip it if <code>target.kind</code> doesn't match
 <code>meta.target_kind</code>, or the profile's <code>Policy.matches(rule_id)</code> excludes it;
 skip it (recording it under <code>rules_skipped</code>) if the target can't satisfy
-<code>meta.required_capabilities</code>; otherwise run it, catching any <code>Exception</code> per
-rule (not <code>KeyboardInterrupt</code> or <code>SystemExit</code>) and recording it on the result's
+<code>meta.required_capabilities</code>; otherwise run it, catching any <code>Exception</code> or
+<code>SystemExit</code> per rule (not <code>KeyboardInterrupt</code>) and recording it on the result's
 <code>errors</code> channel, so one bad rule can't abort the whole scan and the gate fails on
 it by default (<a href="writing-rules.html#what-happens-when-your-rule-raises">when a rule raises</a>). Findings whose verdict is
 <code>inconclusive</code> are partitioned onto the result's <code>unverified</code> channel rather
@@ -577,7 +577,7 @@ fleet management are not built.</p>
 </main>
 </div>
 <footer class="foot"><div class="bar">
-<span class="who">Guardana 1.0.0rc1 · Apache-2.0 ·
+<span class="who">Guardana 1.0.0rc2 · Apache-2.0 ·
 maintained by Konrad Karauda</span>
 <a href="https://github.com/guardana/guardana/blob/main/docs/architecture.md">Edit this page on GitHub</a>
 <a href="https://github.com/guardana/guardana">github.com/guardana</a>
