@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The CLI usage pages document the options they were missing.** `usage-baseline` (`--file`, `--profile`, `--preset`), `usage-collector` (`bootstrap --key-name`, `--scope`), `usage-doctor` (`--profile`, `--preset`), `usage-grade` (`--concurrency`, `--plugins`, `--allow-plugin`), `usage-recipe` (`--concurrency`) and `usage-rules` (`--surface`); all defaults taken from the commands themselves.
 
+### Fixed
+
+- **The custom-rule example reports files it cannot read instead of hanging, truncating or decoding lossily.** `_read_guarded()` refuses non-regular files (FIFOs, sockets, directories), reports files larger than 256 KiB as inconclusive instead of scanning a prefix, and decodes strict UTF-8 instead of dropping undecodable bytes.
+
 ## [1.0.0rc2] - 2026-10-11 — the second release candidate
 
 ### Changed
