@@ -53,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`guardana probe` given flags of another target names every conflicting flag in one refusal**, and its advice no longer leads to a second refusal.
 - **A probe whose kept exchanges cannot be written no longer saves a run that claims their digest.** It removes the part-written sidecar, rewrites the saved run with `exchanges: null`, or removes the run when that fails, and still exits `3`.
 - **Baselines are written whole.** `baseline create`, `baseline update` and `scan --write-baseline` write through a temporary file and a rename, so an approved baseline survives a write that fails part-way, and `baseline create` and `baseline update` exit `3` with an error instead of a traceback when the file cannot be written.
+- **The custom-rule example reports files it cannot read instead of hanging, truncating or decoding lossily.** `_read_guarded()` refuses non-regular files (FIFOs, sockets, directories), reports files larger than 256 KiB as inconclusive instead of scanning a prefix, and decodes strict UTF-8 instead of dropping undecodable bytes.
 
 ### Security
 
