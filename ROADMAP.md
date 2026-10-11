@@ -7,13 +7,13 @@ with a usable CLI and optional collection, outside the production request path.
 
 [GitHub Issues](https://github.com/guardana/guardana/issues) are the live work queue.
 [Milestones](https://github.com/guardana/guardana/milestones) group release scope:
-`1.0.0rc2`, `1.0.0rc3` and `1.0.0`. A milestone is a scope, not a date.
+`1.0.0rc3` and `1.0.0`. A milestone is a scope, not a date.
 Ideas without a reproducible problem or acceptance test start in
 [Discussions Ideas](https://github.com/guardana/guardana/discussions/categories/ideas).
 
-## What ships today (1.0.0rc1)
+## What ships today (1.0.0rc2)
 
-1.0.0rc1 is the first release candidate, shipping the supported surface of the latest stable line, 0.41.0, unchanged.
+1.0.0rc2 is the second candidate, with only fixes found after the first; latest stable 0.41.0's supported surface is unchanged.
 It scans model and code artifacts offline, probes live endpoints, MCP servers and A2A agents, grades recordings, compares runs and gates CI.
 Historical documents from 0.2.0 through 0.41.0 are read by current tests.
 See [FEATURES.md](FEATURES.md) for shipped behaviour, [Product status](docs/product-status.md) for limits, and the [generated rule summary](docs/generated/rule-summary.md) and [rule catalog](docs/generated/rule-catalog.md) for coverage.
@@ -31,7 +31,6 @@ allowed only to correct a defect in it and must be announced.
 
 | Release | Carries | Ships when |
 |---|---|---|
-| `1.0.0rc2` | Fixes from rc1 feedback | Its fixes are complete, its full release gate is green, and CI is green on the exact commit. |
 | `1.0.0rc3` | A second stabilization round | Its fixes are complete, its own full release gate is green, and CI is green on the exact commit. |
 | `1.0.0` | The stable compatibility promise | All stable-release criteria hold, a candidate has had a period without new defect reports, and the full gate and CI are green on the exact commit. |
 
