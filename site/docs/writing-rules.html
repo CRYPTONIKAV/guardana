@@ -749,14 +749,13 @@ multiplies the cost of the whole scan by the number of rules:</p>
 </code></pre>
 <p><code>PythonSource</code> gives you <code>text</code>, <code>tree</code>, and <code>nodes(&lt;node type&gt;)</code> in document
 order (<a href="https://github.com/guardana/guardana/blob/main/packages/guardana-core/src/guardana/core/source.py"><code>guardana.core.source</code></a>).</p>
-<p><code>None</code> means there is no tree, and the engine has already dealt with the half of
-that which matters: a file the scan was <em>prevented</em> from reading — too large, not
-a regular file, unopenable — is recorded by the target and surfaces in the run's
-<code>errors</code>, so it fails the gate rather than disappearing. A file that is simply
-not runnable Python (invalid syntax, undecodable bytes) stays quiet, because a
-rule looking for Python constructs has nothing to find there. Call
-<code>read_source()</code> instead of <code>python_source()</code> if your rule wants that distinction
-in its own hands — it returns <code>PythonSource | UnreadSource | None</code>.</p>
+<p><code>None</code> means there is no tree, and the engine has already recorded why: a file
+that is too large, not a regular file, unopenable, undecodable or not parseable
+by the scanning interpreter surfaces in the run's <code>errors</code>, so it fails the gate
+rather than disappearing. Bytes are decoded the way the interpreter runs them, so
+a UTF-8 byte order mark or a PEP 263 coding line is honoured. Call <code>read_source()</code>
+instead of <code>python_source()</code> if your rule wants the reason in its own hands — it
+returns <code>PythonSource | UnreadSource</code>.</p>
 <p><strong>Worth copying as a pattern:</strong> the AST-based supply-chain rules are written to
 be read. Each is one short file that pulls its nodes off the shared index,
 yields <code>(line, why)</code> tuples from a small module-level <code>_sinks</code> helper, and
@@ -840,8 +839,10 @@ rule throws, records it in the result's <code>errors</code> channel with your ru
 exception, and carries on with the other rules — but the gate <strong>fails</strong> on it by
 default, because a check that did not run must never read as a check that passed.
 Findings you already yielded before raising are kept.</p>
-<p>Two exceptions to that. <code>KeyboardInterrupt</code> and <code>SystemExit</code> are deliberately not
-caught, so Ctrl-C still works. And raising <code>RuleLoadError</code> means &quot;I could not be
+<p>Two exceptions to that. <code>KeyboardInterrupt</code> is deliberately not caught, so Ctrl-C
+still works; <code>SystemExit</code> (a <code>sys.exit()</code> or an argparse <code>--help</code> inside your rule) is
+recorded as your rule's error like any other exception, never as the end of the run, at
+any <code>--concurrency</code>. And raising <code>RuleLoadError</code> means &quot;I could not be
 resolved for this run&quot; — a missing evaluator, say. That is a configuration state
 rather than a defect in your code, and it is still recorded in <code>errors</code>: a check
 that could not be resolved did not run.</p>
@@ -981,7 +982,7 @@ would then be enforced against the guess.</p>
 </main>
 </div>
 <footer class="foot"><div class="bar">
-<span class="who">Guardana 1.0.0rc1 · Apache-2.0 ·
+<span class="who">Guardana 1.0.0rc2 · Apache-2.0 ·
 maintained by Konrad Karauda</span>
 <a href="https://github.com/guardana/guardana/blob/main/docs/writing-rules.md">Edit this page on GitHub</a>
 <a href="https://github.com/guardana/guardana">github.com/guardana</a>

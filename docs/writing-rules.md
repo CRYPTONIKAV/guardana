@@ -489,14 +489,13 @@ for path in target.iter_files((".py",)):
 `PythonSource` gives you `text`, `tree`, and `nodes(<node type>)` in document
 order ([`guardana.core.source`](../packages/guardana-core/src/guardana/core/source.py)).
 
-`None` means there is no tree, and the engine has already dealt with the half of
-that which matters: a file the scan was *prevented* from reading — too large, not
-a regular file, unopenable — is recorded by the target and surfaces in the run's
-`errors`, so it fails the gate rather than disappearing. A file that is simply
-not runnable Python (invalid syntax, undecodable bytes) stays quiet, because a
-rule looking for Python constructs has nothing to find there. Call
-`read_source()` instead of `python_source()` if your rule wants that distinction
-in its own hands — it returns `PythonSource | UnreadSource | None`.
+`None` means there is no tree, and the engine has already recorded why: a file
+that is too large, not a regular file, unopenable, undecodable or not parseable
+by the scanning interpreter surfaces in the run's `errors`, so it fails the gate
+rather than disappearing. Bytes are decoded the way the interpreter runs them, so
+a UTF-8 byte order mark or a PEP 263 coding line is honoured. Call `read_source()`
+instead of `python_source()` if your rule wants the reason in its own hands — it
+returns `PythonSource | UnreadSource`.
 
 **Worth copying as a pattern:** the AST-based supply-chain rules are written to
 be read. Each is one short file that pulls its nodes off the shared index,
@@ -601,8 +600,10 @@ exception, and carries on with the other rules — but the gate **fails** on it 
 default, because a check that did not run must never read as a check that passed.
 Findings you already yielded before raising are kept.
 
-Two exceptions to that. `KeyboardInterrupt` and `SystemExit` are deliberately not
-caught, so Ctrl-C still works. And raising `RuleLoadError` means "I could not be
+Two exceptions to that. `KeyboardInterrupt` is deliberately not caught, so Ctrl-C
+still works; `SystemExit` (a `sys.exit()` or an argparse `--help` inside your rule) is
+recorded as your rule's error like any other exception, never as the end of the run, at
+any `--concurrency`. And raising `RuleLoadError` means "I could not be
 resolved for this run" — a missing evaluator, say. That is a configuration state
 rather than a defect in your code, and it is still recorded in `errors`: a check
 that could not be resolved did not run.

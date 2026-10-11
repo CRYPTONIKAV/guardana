@@ -23,6 +23,13 @@ Hugging Face TGI's `/generate`. `--mcp` examines an
 [MCP server](#probing-an-mcp-server) and `--a2a` an [A2A agent](#probing-an-a2a-agent)
 instead of a model.
 
+A tool call whose `arguments` arrive as a JSON object instead of a JSON string is graded,
+and sent back to the endpoint, as that object's JSON text. A tool call that cannot be read
+whole — no function name, or arguments that are neither — is never dropped or emptied: the
+calls beside it that can be read are still graded, and a case they do not fail is
+`inconclusive`, while the other checks go on. A reply whose `tool_calls` is not a list stops
+the run (exit `4`).
+
 ```bash
 guardana probe (--url <base-url> --model <name> | --target <scheme://locator> | --mcp <server> | --a2a <agent-url>) [OPTIONS]
 ```
@@ -94,7 +101,7 @@ guardana probe \
 ```
 
 **Guardana never calls a tool on your server.** Every observation is made with
-`server/discover`, `tools/list`, the `initialize` handshake (followed by
+`server/discover`, `tools/list` (every page of it), the `initialize` handshake (followed by
 `notifications/initialized`) where the server still expects one, one `tasks/list` sent
 without a credential, and unauthenticated `GET`s of the two discovery documents. Calling a
 tool is a side effect on somebody's system — possibly a write, possibly a payment
@@ -196,6 +203,13 @@ The pin stores a digest per tool rather than the prose, so the file records *tha
 the manifest was approved and cannot be edited into agreement. Without `--mcp-pin`
 drift is reported `inconclusive`, never as a clean server.
 
+Every page of the listing is read, following `nextCursor`, and both the checks and the
+pin cover every page, up to 16 pages and 4 MiB of UTF-8 in total. A listing that cannot be read to its
+last page is never graded as a shorter one: more pages or bytes than that, a cursor that
+repeats or is not a string, a page that holds no tool list, an entry that is not a tool
+declaration, or a tool named twice is an error of the checks that read the manifest
+(exit `2`), and `--write-mcp-pin` exits `4` without writing a pin.
+
 Pins written before 0.13.0 are `schema_version 1` and cover **descriptions
 only**. They still load and still compare, and every run that uses one carries a
 note saying which drift it cannot see — re-approve with `--write-mcp-pin` to cover
@@ -216,7 +230,7 @@ saying plainly when it could not reach a verdict:
 | `guardana.mcp.discovery_target` | Every discovery address the server advertises is one a client may follow |
 | `guardana.mcp.issuer_identification` | The authorization server advertises `authorization_response_iss_parameter_supported`, without which a client cannot detect an authorization-server mix-up (RFC 9207) |
 | `guardana.mcp.cache_scope` | A tool listing the server gates behind a credential is not also declared `cacheScope: "public"`, which would invite any shared gateway to serve it to a caller the server would have refused |
-| `guardana.mcp.task_identity` | One `tasks/list` sent without a credential lists no task, since a fresh anonymous session owns none; on a server that serves tools to anyone, listed task ids are not a counter, repeated or short. A refused listing is the conforming answer. An empty one on a gated server is confirmed with one listing as the operator: a task there shows the anonymous caller was kept from it; without `--mcp-token-env`, or with no task to show, the check is `inconclusive`. An operator's session refused with `401` or `403` is `inconclusive` too. A server that declares no tasks and answers `tasks/list` as an unknown method is skipped `not_offered`, a coverage gap; when what it declares could not be read at all, the check is `inconclusive` instead |
+| `guardana.mcp.task_identity` | One `tasks/list` sent without a credential lists no task, since a fresh anonymous session owns none; on a server that serves tools to anyone, listed task ids are not a counter, repeated or short. A refused listing is the conforming answer. An empty one on a gated server is confirmed with one listing as the operator: a task there shows the anonymous caller was kept from it; without `--mcp-token-env`, or with no task to show, the check is `inconclusive`. Only the first page of the listing is read, so an empty one that names a further page is `inconclusive` too. An operator's session refused with `401` or `403` is `inconclusive` too. A server that declares no tasks and answers `tasks/list` as an unknown method is skipped `not_offered`, a coverage gap; when what it declares could not be read at all, the check is `inconclusive` instead |
 
 On a server that answers an anonymous caller, `authorization_discovery`, `scope_breadth`,
 `issuer_identification` and `discovery_target` are `inconclusive`: no credential was asked
@@ -321,8 +335,8 @@ against a server that fails exits `4` without writing a pin.
 
 ### Cost
 
-An MCP probe sends these requests: one `server/discover` to settle the revision, a
-listing without a credential (preceded by a handshake where the server still expects
+An MCP probe sends these requests: one `server/discover` to settle the revision, one
+request per page of the tool listing (up to 16), a listing without a credential (preceded by a handshake where the server still expects
 one), up to six discovery fetches, a listing with the forged token, a handful of
 handshakes to sample session ids, one `initialize` to ask whether a modern server still
 offers `2025-11-25`, one `tasks/list` (and up to three more requests — a handshake, its

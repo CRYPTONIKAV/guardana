@@ -231,7 +231,10 @@ rules:
   paths_exclude: [&quot;data/*&quot;, &quot;archive&quot;]  # optional; globs (matched relative to the
                                          # scan root) of files/dirs to skip. A
                                          # `.guardanaignore` file at the root adds
-                                         # more, one glob per line.
+                                         # more, one glob per line. Exclude here a
+                                         # `.py` file the scanning interpreter cannot
+                                         # decode or parse; otherwise it leaves the
+                                         # run indeterminate.
 
 plugins:                        # optional; which installed plugins a run imports
   mode: allowlist               # all | builtins | allowlist | disabled
@@ -696,9 +699,11 @@ each judge's own. A slot that lies past <code>max_duration</code> is not waited 
 an exhausted budget, exit <code>6</code>. A target that sends nothing (a file scan, a trace, a
 recording) accepts a rate, as it accepts <code>max_requests</code>. <a href="usage-plan.html#checking-against-a-budget"><code>guardana plan probe</code></a> states the wall time a rate needs and
 refuses a <code>max_duration</code> below it.</p>
-<p>A token ceiling is held only while replies report their token counts. The first
-reply that leaves out a count a ceiling depends on stops the run as an exhausted
-budget, exit <code>6</code>, because no later request could be measured against it.</p>
+<p>A token ceiling is held only while replies report their token counts. A token count
+below zero is read as not reported, because adding a negative count to the sum would
+let every later request pass the ceiling. The first reply that leaves out a count a
+ceiling depends on stops the run as an exhausted budget, exit <code>6</code>, because no later
+request could be measured against it.</p>
 <p><strong>The ceiling belongs to the run, not to a pass of it.</strong> <code>probe</code> runs each
 canary-planting rule against a target of its own — the marker has to be in that
 rule's system prompt and in no other — and every one of those passes shares one
@@ -720,7 +725,7 @@ paying for the answer.</p>
 </main>
 </div>
 <footer class="foot"><div class="bar">
-<span class="who">Guardana 1.0.0rc1 · Apache-2.0 ·
+<span class="who">Guardana 1.0.0rc2 · Apache-2.0 ·
 maintained by Konrad Karauda</span>
 <a href="https://github.com/guardana/guardana/blob/main/docs/profiles.md">Edit this page on GitHub</a>
 <a href="https://github.com/guardana/guardana">github.com/guardana</a>

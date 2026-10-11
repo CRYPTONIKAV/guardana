@@ -51,7 +51,10 @@ rules:
   paths_exclude: ["data/*", "archive"]  # optional; globs (matched relative to the
                                          # scan root) of files/dirs to skip. A
                                          # `.guardanaignore` file at the root adds
-                                         # more, one glob per line.
+                                         # more, one glob per line. Exclude here a
+                                         # `.py` file the scanning interpreter cannot
+                                         # decode or parse; otherwise it leaves the
+                                         # run indeterminate.
 
 plugins:                        # optional; which installed plugins a run imports
   mode: allowlist               # all | builtins | allowlist | disabled
@@ -385,9 +388,11 @@ recording) accepts a rate, as it accepts `max_requests`. [`guardana plan
 probe`](usage-plan.md#checking-against-a-budget) states the wall time a rate needs and
 refuses a `max_duration` below it.
 
-A token ceiling is held only while replies report their token counts. The first
-reply that leaves out a count a ceiling depends on stops the run as an exhausted
-budget, exit `6`, because no later request could be measured against it.
+A token ceiling is held only while replies report their token counts. A token count
+below zero is read as not reported, because adding a negative count to the sum would
+let every later request pass the ceiling. The first reply that leaves out a count a
+ceiling depends on stops the run as an exhausted budget, exit `6`, because no later
+request could be measured against it.
 
 **The ceiling belongs to the run, not to a pass of it.** `probe` runs each
 canary-planting rule against a target of its own — the marker has to be in that
