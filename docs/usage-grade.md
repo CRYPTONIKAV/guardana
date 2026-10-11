@@ -133,6 +133,17 @@ Measured
 1 finding(s); 1 rule(s) run, 0 skipped. 3/3 case(s) measured. 1 component(s) observed.
 ```
 
+## Flags
+
+`--profile`/`--preset`/`--rules`/`--trials` and the budget flags are covered in
+the sections above and below; the remaining flags are:
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--concurrency INTEGER` | `4` | How many rules may grade at once |
+| `--plugins [all\|builtins\|allowlist\|disabled]` | `builtins`, or the profile's `plugins:` | Which installed plugins to load — same meaning as on `probe` |
+| `--allow-plugin TEXT` | none | Distribution to trust; repeatable, needs `--plugins allowlist` |
+
 ## Traffic and budgets
 
 No request reaches the target: the saved run records `usage.requests: 0`. A judge configured

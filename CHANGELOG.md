@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- **The CLI usage pages document the options they were missing.** `usage-baseline` (`--file`, `--profile`, `--preset`), `usage-collector` (`bootstrap --key-name`, `--scope`), `usage-doctor` (`--profile`, `--preset`), `usage-grade` (`--concurrency`, `--plugins`, `--allow-plugin`), `usage-recipe` (`--concurrency`) and `usage-rules` (`--surface`); all defaults taken from the commands themselves.
+
 ## [1.0.0rc2] - 2026-10-11 — the second release candidate
 
 ### Changed

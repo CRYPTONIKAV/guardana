@@ -234,6 +234,21 @@ hurry, and it should look like one.</p>
 <td>Directory to scan; required unless <code>--target</code> is used</td>
 </tr>
 <tr>
+<td><code>--file PATH</code></td>
+<td><code>guardana-baseline.yaml</code></td>
+<td>The baseline to refresh (<code>update</code> only; <code>create</code> writes with <code>--output</code>)</td>
+</tr>
+<tr>
+<td><code>--profile PATH</code></td>
+<td>none (built-in default profile)</td>
+<td>Path to a <code>guardana.yaml</code> policy file</td>
+</tr>
+<tr>
+<td><code>--preset [ci|pre-training|monitor|release]</code></td>
+<td>none</td>
+<td>Named policy preset (mutually exclusive with <code>--profile</code>) — see <a href="profiles.html#named-presets---preset"><code>profiles.md</code></a></td>
+</tr>
+<tr>
 <td><code>--target SCHEME://LOCATOR</code></td>
 <td>none</td>
 <td>Build a trusted installed artifact target for <code>create</code> or <code>update</code></td>

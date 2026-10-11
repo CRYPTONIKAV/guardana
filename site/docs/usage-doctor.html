@@ -262,6 +262,28 @@ plugins the profile trusts. Each problem is printed and the command
 exits <code>3</code>, as the run would. Useful as an early pipeline step: a typo in
 <code>guardana.yaml</code> should fail in a second rather than after a probe has spent its
 budget finding out.</p>
+<p>Both <code>config validate</code> and <code>config explain</code> take a policy selection flag:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--profile PATH</code></td>
+<td>none (built-in default profile)</td>
+<td>A <code>guardana.yaml</code> policy file</td>
+</tr>
+<tr>
+<td><code>--preset [ci|pre-training|monitor|release]</code></td>
+<td>none</td>
+<td>Named policy preset; mutually exclusive with <code>--profile</code></td>
+</tr>
+</tbody>
+</table></div>
 <h2 id="config-explain--what-is-actually-in-force"><code>config explain</code> — what is actually in force</h2>
 <pre><code class="language-bash">guardana config explain --format json
 </code></pre>

@@ -502,7 +502,8 @@ pair's <code>observed</code> must still grade <code>fail</code> and its <code>ac
 now. A pair that no longer holds, or a suite whose evaluator cannot regrade without sending,
 is a refusal rather than a drifted pin, because it is broken in the lock and in the
 configuration alike; the refusal names each case by its rule and dataset line.</p>
-<p><code>recipe run</code> takes no selection, trust, trials or profile flags: those are what the lock pins.</p>
+<p><code>recipe run</code> takes no selection, trust, trials or profile flags: those are what the lock pins.
+Its one flag is <code>--concurrency INTEGER</code> (default <code>4</code>): how many rules may run at once.</p>
 <p>Every rule the lock pins must run to completion. One that the run skips — a recording that
 holds no answer for it is the usual cause — that errors or that is never reached is a
 <code>demanded_check</code> coverage shortfall: the run is <code>indeterminate</code> (exit <code>2</code>) unless a finding

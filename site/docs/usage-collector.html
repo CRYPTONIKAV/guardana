@@ -219,6 +219,9 @@ guardana-collector serve                                # http://127.0.0.1:8000
 because a security boundary that adds four commands to the first run is a boundary
 that makes a tool nobody starts. The granular commands below exist for the second
 team, not for the first one.</p>
+<p><code>bootstrap</code> takes <code>--key-name TEXT</code> (default <code>first-key</code>): what to call the first
+key. It also takes <code>--scope [ingest|read]</code> (default <code>ingest</code> only): repeatable,
+exactly like <code>key create</code>.</p>
 <p><code>serve</code> binds <strong>loopback</strong> unless told otherwise: <code>--host 0.0.0.0</code> is a decision,
 so it is one you type. It needs an ASGI server, which is an extra
 (<code>pip install &quot;guardana-server[serve]&quot;</code>) rather than a dependency — a deployment
