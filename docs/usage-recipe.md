@@ -139,14 +139,17 @@ imports it is.
   the top of the directory only (a package of the project may carry those names); and the
   recipe's own lock file and output directory when the recipe sits inside the directory, since
   `recipe lock` and `recipe run` write them. Symlinks are followed, so a linked file is pinned
-  by what it holds. The `.pth` files and setuptools `__editable__…finder.py` modules the
-  install's `RECORD` lists are read first: a path they add or map outside the directory is code
-  the pin would not cover, so the distribution stays unpinned. Bytecode under `__pycache__/`
-  is not pinned, but bytecode this interpreter would load in place of a pinned source
-  (hash-based bytecode, whatever hash it records, or bytecode recording the source's
-  modification time and size) leaves the distribution unpinned unless it is what that source
-  compiles to; bytecode only another interpreter would load is checked when that interpreter
-  pins, and this check does not change pin digests.
+  by what it holds, and a linked directory is also pinned by where it points, so retargeting it
+  changes the pin. The `.pth` files and setuptools `__editable__…finder.py` modules the
+  install's `RECORD` lists are read first: a path they add or map outside the directory, or
+  into a directory the tree pin leaves out (such as `build/`, where a setuptools strict
+  editable install maps its packages, `.venv/` or `*.egg-info/`), is code the pin would not
+  cover, so the distribution stays unpinned. Bytecode under `__pycache__/` is not pinned, but
+  bytecode this interpreter would load in place of a pinned source (hash-based bytecode,
+  whatever hash it records, or bytecode recording the source's modification time and size)
+  leaves the distribution unpinned unless it is what that source compiles to; bytecode only
+  another interpreter would load is checked when that interpreter pins, and this check does
+  not change pin digests.
 - **Any other direct URL** — a directory installed without `-e`, a VCS checkout, an archive —
   is pinned by its installed `RECORD`: each entry's path and recorded hash, except bytecode
   under `__pycache__/` and every file of its own `.dist-info` but `METADATA` (its version and
@@ -228,6 +231,7 @@ is a refusal rather than a drifted pin, because it is broken in the lock and in 
 configuration alike; the refusal names each case by its rule and dataset line.
 
 `recipe run` takes no selection, trust, trials or profile flags: those are what the lock pins.
+Its one flag is `--concurrency INTEGER` (default `4`): how many rules may run at once.
 
 Every rule the lock pins must run to completion. One that the run skips — a recording that
 holds no answer for it is the usual cause — that errors or that is never reached is a

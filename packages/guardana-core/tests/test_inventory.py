@@ -176,3 +176,78 @@ def test_the_inventory_does_not_depend_on_which_rules_run(tmp_path: Path) -> Non
     ).run(ArtifactTarget(root))
     assert nothing.rules_run_count == 0
     assert {i.ref for i in nothing.observations} == {i.ref for i in everything.observations}
+
+
+def _model_formats(root: Path) -> dict[str, str]:
+    return {
+        item.name: item.attributes["format"]
+        for item in observe(ArtifactTarget(root))
+        if item.kind is ObservationKind.MODEL
+    }
+
+
+def test_an_hdf5_file_under_a_shared_name_is_a_model(tmp_path: Path) -> None:
+    for name in ("model.bin", "model.hdf", "model.weights", "model.tf", "x.model"):
+        (tmp_path / name).write_bytes(b"\x89HDF\r\n\x1a\n" + bytes(16))
+    (tmp_path / "main.tf").write_text('resource "x" "y" {}\n', encoding="utf-8")
+    (tmp_path / "data.hdf").write_bytes(b"\x0e\x03\x13\x01" + bytes(16))
+
+    assert _model_formats(tmp_path) == dict.fromkeys(
+        ("model.bin", "model.hdf", "model.weights", "model.tf", "x.model"), "keras-hdf5"
+    )
+
+
+def test_a_config_json_is_a_model_only_inside_a_keras_model_directory(tmp_path: Path) -> None:
+    model = tmp_path / "my_model"
+    model.mkdir()
+    (model / "config.json").write_text("{}", encoding="utf-8")
+    (model / "metadata.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "tokenizer.json").write_text("{}", encoding="utf-8")
+
+    observed = {
+        item.ref: item.attributes["format"]
+        for item in observe(ArtifactTarget(tmp_path))
+        if item.kind is ObservationKind.MODEL
+    }
+
+    assert observed == {str(model / "config.json"): "keras-directory"}
+
+
+def test_an_hdf5_file_behind_a_userblock_is_a_model(tmp_path: Path) -> None:
+    (tmp_path / "near.bin").write_bytes(bytes(1024) + b"\x89HDF\r\n\x1a\n" + bytes(16))
+    with (tmp_path / "far.weights").open("wb") as handle:
+        handle.seek(32 * 1024 * 1024)
+        handle.write(b"\x89HDF\r\n\x1a\n" + bytes(16))
+    (tmp_path / "odd.bin").write_bytes(bytes(1000) + b"\x89HDF\r\n\x1a\n" + bytes(16))
+
+    assert _model_formats(tmp_path) == {"near.bin": "keras-hdf5", "far.weights": "keras-hdf5"}
+
+
+def test_a_keras_model_directory_is_recognised_whatever_the_case_of_its_names(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "Config.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "METADATA.JSON").write_text("{}", encoding="utf-8")
+
+    assert _model_formats(tmp_path) == {"Config.json": "keras-directory"}
+
+
+def test_a_tensorflow_savedmodel_graph_is_listed_by_its_exact_name(tmp_path: Path) -> None:
+    (tmp_path / "binary").mkdir()
+    (tmp_path / "binary" / "saved_model.pb").write_bytes(b"\x08\x01")
+    (tmp_path / "text").mkdir()
+    (tmp_path / "text" / "saved_model.pbtxt").write_text("meta_graphs {}\n")
+    (tmp_path / "graph.pb").write_bytes(b"\x08\x01")
+    (tmp_path / "label_map.pbtxt").write_text("item {}\n")
+
+    formats = {
+        item.name: item.attributes["format"]
+        for item in observe(ArtifactTarget(tmp_path))
+        if item.kind is ObservationKind.MODEL
+    }
+
+    assert formats == {
+        "saved_model.pb": "tensorflow-savedmodel",
+        "saved_model.pbtxt": "tensorflow-savedmodel",
+    }

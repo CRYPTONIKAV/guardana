@@ -1,9 +1,11 @@
 import json
+import os
 import re
 import zipfile
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
+from guardana.core.formats import find_hdf5_signature
 from guardana.core.report import Evidence, Finding
 from guardana.core.rule import RuleContext, RuleMeta
 from guardana.core.rule.fixture import FixtureOutcome, RuleFixture, materialise
@@ -32,18 +34,70 @@ _LAMBDA = "Lambda"
 # malicious rather than a benign in-graph tensor op — Keras 3.9's own fix draws
 # the same line by whitelisting Keras-internal modules only.
 _DANGEROUS_MODULES = ("os", "subprocess", "sys", "socket", "shutil", "pty", "importlib")
-# The model config is JSON wherever it is stored, and a Lambda layer declares
-# itself with this exact key/value pair. Matching the bare word "Lambda" instead
-# reported any layer a user happened to *name* "Lambda" as code execution.
-_CLASS_MARKER = re.compile(rb'"class_name"\s*:\s*"Lambda"')
 _MAX_CONFIG_BYTES = 16 * 1024 * 1024
+# The module hint on a byte-level match is best-effort: the finding never depends
+# on it, so its decoding is bounded per marker and in total parsed characters.
+_ATTEMPTS_PER_MARKER = 16
+_DECODE_BUDGET_FACTOR = 2
+_DECODER = json.JSONDecoder()
 _UNSCANNED_TITLE = "Keras model not scanned"
+_HDF5_SUFFIXES = (".h5", ".hdf5")
+# tf_keras loads any HDF5 file as a model whatever it is called, so these names,
+# which other formats share, are read when their bytes are an HDF5 file.
+_HDF5_SNIFFED_SUFFIXES = (".bin", ".model", ".hdf", ".weights", ".tf")
+# An unzipped Keras model is a directory holding `config.json`; one beside either
+# of Keras' own files is read, while a lone `config.json` belongs to anything.
+_DIRECTORY_CONFIG = "config.json"
+_DIRECTORY_SIBLINGS = ("metadata.json", "model.weights.h5")
+
+
+def _json_spelling(word: str) -> bytes:
+    """Build a pattern matching every spelling inside a JSON string that decodes to `word`."""
+    alternatives = []
+    for char in word:
+        hex_digits = b"".join(
+            b"[" + digit.encode() + digit.upper().encode() + b"]"
+            if digit.isalpha()
+            else digit.encode()
+            for digit in f"{ord(char):04x}"
+        )
+        alternatives.append(b"(?:" + re.escape(char.encode()) + rb"|\\u" + hex_digits + b")")
+    return b"".join(alternatives)
+
+
+_JSON_STRING_CHAR = rb'(?:[^"\\]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))'
+
+# A Lambda layer declares itself with this key/value pair; matching the bare word
+# "Lambda" reported any layer a user happened to *name* "Lambda". Keras resolves a
+# dotted class name through its export registry (`layers.Lambda` under module
+# `keras`), and reads the config with `json.loads`, so the pattern accepts any
+# dotted prefix and every spelling that decoder turns into the pair: any character
+# as a unicode escape, JSON whitespace around the colon.
+_CLASS_MARKER = re.compile(
+    b'"'
+    + _json_spelling("class_name")
+    + b'"[ \t\n\r]*:[ \t\n\r]*"(?:'
+    + _JSON_STRING_CHAR
+    + b"*"
+    + _json_spelling(".")
+    + b")?"
+    + _json_spelling(_LAMBDA)
+    + b'"'
+)
+_CLASS_MARKER_TEXT = re.compile(_CLASS_MARKER.pattern.decode("ascii"))
+
+
+def _is_lambda_class(class_name: object) -> bool:
+    """Whether a `class_name` names the Lambda layer, bare or by a dotted export path."""
+    return isinstance(class_name, str) and (
+        class_name == _LAMBDA or class_name.endswith("." + _LAMBDA)
+    )
 
 
 def _iter_lambda_configs(node: object) -> Iterator[object]:
     """Yield the `config` of every object in the tree whose `class_name` is Lambda."""
     if isinstance(node, dict):
-        if node.get("class_name") == _LAMBDA:
+        if _is_lambda_class(node.get("class_name")):
             yield node.get("config")
         for value in node.values():
             yield from _iter_lambda_configs(value)
@@ -58,6 +112,62 @@ def _dangerous_module(config: object) -> str | None:
     for module in _DANGEROUS_MODULES:
         if f"'{module}'" in blob or f'"{module}"' in blob or f"import {module}" in blob:
             return module
+    return None
+
+
+def _decode_from(text: str, start: int) -> tuple[object | None, int]:
+    """Decode the object opening at `start`; return it, or None, and the characters spent.
+
+    A failed attempt is charged up to where the decoder stopped, or to the end of the
+    text when the decoder does not say, so the charge never undercounts the work.
+    """
+    try:
+        value, end = _DECODER.raw_decode(text, start)
+    except json.JSONDecodeError as exc:
+        return None, exc.pos - start + 1
+    except (ValueError, RecursionError):
+        return None, len(text) - start
+    return value, end - start
+
+
+def _last_brace(text: str, low: int, high: int) -> int:
+    """Return the offset of the last `{` in `text[low:high]`, or -1 if there is none."""
+    return text.rfind("{", low, high)
+
+
+def _module_in_marked_layers(data: bytes) -> str | None:
+    """Return a dangerous module a marked Lambda layer references, if one decodes.
+
+    Walks back from each class marker to the nearest `{` whose object decodes and
+    holds a Lambda, the layer itself, so its body is read the way Keras reads it.
+    No search reaches below the previous marker and the decoder parses a bounded
+    multiple of the text, so the work stays linear in the bytes read.
+    """
+    text = data.decode("utf-8", errors="replace")
+    budget = _DECODE_BUDGET_FACTOR * len(text)
+    floor = 0
+    for marker in _CLASS_MARKER_TEXT.finditer(text):
+        brace = marker.start()
+        for _ in range(_ATTEMPTS_PER_MARKER):
+            brace = _last_brace(text, floor, brace)
+            if brace < 0 or budget <= 0:
+                break
+            layer, spent = _decode_from(text, brace)
+            budget -= spent
+            if layer is None:
+                continue
+            try:
+                configs = list(_iter_lambda_configs(layer))
+                module = next(filter(None, map(_dangerous_module, configs)), None)
+            except RecursionError:
+                break
+            if module is not None:
+                return module
+            if configs:
+                break
+        if budget <= 0:
+            break
+        floor = marker.start()
     return None
 
 
@@ -117,26 +227,41 @@ class KerasLambdaRule(ArtifactRule):
         )
 
     def run(self, target: Target, ctx: RuleContext) -> Iterable[Finding]:
-        """Parse `.keras` archives structurally; scan legacy `.h5`/`.hdf5` for the class marker."""
+        """Parse Keras configs structurally; scan HDF5 models for the class marker."""
         if not isinstance(target, FileReader):
             return
         for path in target.iter_files((".keras",)):
-            yield from self._scan_keras(path, ctx)
-            ctx.examined(path)
-        for path in target.iter_files((".h5", ".hdf5")):
-            yield from self._byte_scan(path, ctx, fallback_reason=None)
-            ctx.examined(path)
-
-    def _scan_keras(self, path: Path, ctx: RuleContext) -> Iterator[Finding]:
-        config = _read_keras_config(path)
-        if config is None:
             # Real `.keras` files are zip archives. A file that is not one is
             # malformed, so fall back to the byte marker — a payload inside a
             # deliberately broken archive must not become invisible.
-            yield from self._byte_scan(path, ctx, fallback_reason="not a readable .keras archive")
+            config = _read_keras_config(path)
+            yield from self._scan_config(path, config, ctx, "not a readable .keras archive")
+            ctx.examined(path)
+        for path in _directory_configs(target):
+            config = _read_json_file(path)
+            yield from self._scan_config(path, config, ctx, "not a readable Keras config")
+            ctx.examined(path)
+        for path in target.iter_files(_HDF5_SUFFIXES):
+            yield from self._byte_scan(path, ctx, fallback_reason=None)
+            ctx.examined(path)
+        for path in target.iter_files(_HDF5_SNIFFED_SUFFIXES):
+            if _holds_hdf5_signature(path):
+                yield from self._byte_scan(path, ctx, fallback_reason=None)
+                ctx.examined(path)
+
+    def _scan_config(
+        self, path: Path, config: object | None, ctx: RuleContext, unreadable: str
+    ) -> Iterator[Finding]:
+        if config is None:
+            yield from self._byte_scan(path, ctx, fallback_reason=unreadable)
             return
-        for lambda_config in _iter_lambda_configs(config):
-            module = _dangerous_module(lambda_config)
+        try:
+            modules = [_dangerous_module(found) for found in _iter_lambda_configs(config)]
+        except RecursionError:
+            reason = "its model config is nested too deeply to walk"
+            yield from self._byte_scan(path, ctx, fallback_reason=reason)
+            return
+        for module in modules:
             summary = "Keras Lambda layer runs arbitrary code on load"
             if module is not None:
                 summary += f"; references the {module!r} module (near-certain malicious)"
@@ -154,7 +279,11 @@ class KerasLambdaRule(ArtifactRule):
             # Firm, not a lead: the config declares the layer, and `load_model`
             # ignores `safe_mode` for the legacy format (CVE-2025-9905), so this
             # will execute.
-            yield self._finding(path, "model config declares a Lambda layer, which runs on load")
+            summary = "model config declares a Lambda layer, which runs on load"
+            module = _module_in_marked_layers(data)
+            if module is not None:
+                summary += f"; references the {module!r} module (near-certain malicious)"
+            yield self._finding(path, summary)
         elif fallback_reason is not None:
             yield self._unscanned(path, fallback_reason, ctx)
         elif truncated:
@@ -186,16 +315,58 @@ class KerasLambdaRule(ArtifactRule):
         )
 
 
+def _directory_configs(target: FileReader) -> list[Path]:
+    """Return each `config.json` the listing holds beside a file only Keras writes, any case."""
+    listed = {(path.parent, path.name.lower()) for path in target.iter_files((".json", ".h5"))}
+    return [
+        path
+        for path in target.iter_files((".json",))
+        if path.name.lower() == _DIRECTORY_CONFIG
+        and any((path.parent, sibling) in listed for sibling in _DIRECTORY_SIBLINGS)
+    ]
+
+
+def _holds_hdf5_signature(path: Path) -> bool:
+    """Whether the HDF5 library would open `path`, wherever its userblock puts the signature.
+
+    A signature past the read bound still counts: the byte scan then reports the file
+    as read only in part instead of passing over it.
+    """
+    try:
+        if not path.is_file():
+            return False
+        with path.open("rb") as handle:
+            size = os.fstat(handle.fileno()).st_size
+            return find_hdf5_signature(handle, size) is not None
+    except OSError:
+        return False
+
+
+def _read_json_file(path: Path) -> object | None:
+    """Read and parse a JSON file within the read bound; None if unreadable or cut short."""
+    prefix = read_bytes_bounded(path, _MAX_CONFIG_BYTES)
+    if prefix is None or prefix[1]:
+        return None
+    try:
+        parsed: object = json.loads(prefix[0])
+    except (ValueError, RecursionError):
+        return None
+    return parsed
+
+
 def _read_keras_config(path: Path) -> object | None:
     """Read and parse `config.json` from a `.keras` archive; None if unreadable."""
     try:
+        # A FIFO or device node opens and then blocks on read, which would hang the scan.
+        if not path.is_file():
+            return None
         with zipfile.ZipFile(path) as archive:
             if "config.json" not in archive.namelist():
                 return None
             with archive.open("config.json") as member:
                 raw = member.read(_MAX_CONFIG_BYTES)
         parsed: object = json.loads(raw)
-    except (zipfile.BadZipFile, OSError, ValueError):
+    except (zipfile.BadZipFile, OSError, ValueError, RecursionError):
         return None
     else:
         return parsed

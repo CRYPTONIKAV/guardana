@@ -1,7 +1,8 @@
 import ast
 import json
 import re
-from collections.abc import Iterable, Iterator
+from collections.abc import Generator, Iterable, Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from guardana.core.evaluator.base import Verdict
@@ -21,15 +22,31 @@ from guardana.core.taxonomy import (
 from guardana.rules._base import ArtifactRule
 from guardana.rules.supply_chain import _samples
 from guardana.rules.supply_chain._code_sinks import code_sinks
-from guardana.rules.supply_chain._leads import unread_component, unscanned_verdict
+from guardana.rules.supply_chain._ipython_cells import (
+    PIPE_TO_SHELL,
+    CellReading,
+    NotebookState,
+    bind_names,
+    ipython_calls,
+    read_cell,
+    read_shell_command,
+)
+from guardana.rules.supply_chain._leads import lead_verdict, unread_component, unscanned_verdict
 from guardana.rules.supply_chain._reading import MAX_SCAN_BYTES, read_text_prefix
 
-# Fetching a script and piping it straight into a shell (`curl … | sh`) is the
-# classic notebook payload — a channel the `.py` AST scanners never see.
-_PIPE_TO_SHELL = re.compile(r"\|\s*(sudo\s+)?(ba)?sh\b")
-_SHELL_CELL_MAGIC = ("%%bash", "%%sh", "%%script")
-# IPython shell forms that are not Python: a `!` line escape, and `var = !cmd`.
-_ASSIGN_SHELL = re.compile(r"^\s*[\w.]+\s*=\s*!(.*)$")
+# How deep calls on the IPython object may nest inside the code they run before the
+# rest is reported unread.
+_MAX_IPYTHON_NESTING = 4
+
+
+@dataclass
+class _NotebookScan:
+    """One notebook being scanned: its path, the state its cells build, what was unread."""
+
+    path: Path
+    ctx: RuleContext
+    state: NotebookState = field(default_factory=NotebookState)
+    unread: set[str] = field(default_factory=set)
 
 
 def _cell_source(cell: object) -> str | None:
@@ -42,32 +59,27 @@ def _cell_source(cell: object) -> str | None:
     return source if isinstance(source, str) else None
 
 
-def _split_shell_and_python(source: str) -> tuple[str, list[str]]:
-    """Separate a cell into (Python source, shell command lines).
+def _languages(doc: dict[str, object]) -> list[str]:
+    """Return the kernel languages a notebook declares, in the metadata IPython writes."""
+    metadata = doc.get("metadata")
+    if not isinstance(metadata, dict):
+        return []
+    declared: list[object] = []
+    kernelspec = metadata.get("kernelspec")
+    if isinstance(kernelspec, dict):
+        declared.append(kernelspec.get("language"))
+    language_info = metadata.get("language_info")
+    if isinstance(language_info, dict):
+        declared.append(language_info.get("name"))
+    return [
+        value if isinstance(value, str) else repr(value)
+        for value in declared
+        if value is not None and not (isinstance(value, str) and not value.strip())
+    ]
 
-    `!` escapes, `var = !cmd`, and `%%bash`-style cell magics run a shell, not
-    Python; line magics (`%…`) are dropped so the remaining Python parses. Removed
-    lines are blanked, not deleted, so a reported line still maps to the cell.
-    """
-    lines = source.splitlines()
-    if lines and lines[0].lstrip().startswith(_SHELL_CELL_MAGIC):
-        return "", lines
-    python: list[str] = []
-    shell: list[str] = []
-    for line in lines:
-        stripped = line.lstrip()
-        assign = _ASSIGN_SHELL.match(line)
-        if stripped.startswith("!"):
-            shell.append(stripped[1:])
-            python.append("")
-        elif assign:
-            shell.append(assign.group(1))
-            python.append("")
-        elif stripped.startswith("%"):
-            python.append("")
-        else:
-            python.append(line)
-    return "\n".join(python), shell
+
+def _is_python(language: str) -> bool:
+    return re.fullmatch(r"i?python[\d.]*", language.strip().lower().replace(" ", "")) is not None
 
 
 class NotebookPayloadRule(ArtifactRule):
@@ -75,9 +87,11 @@ class NotebookPayloadRule(ArtifactRule):
 
     Notebooks are a primary ML distribution format, yet the `.py` scanners never
     see inside them. This applies the shared code-sink detection to each code
-    cell, and catches the notebook-only channels — a `!curl … | sh` escape or a
-    `%%bash` cell. A cell whose Python cannot be parsed is surfaced as a lead,
-    never silently skipped: an un-analyzable cell is not a proven-clean one.
+    cell, and catches the notebook-only channels — a `!curl … | sh` escape, a
+    `%%bash` cell or a `%alias`. A cell whose Python cannot be parsed, a magic that
+    runs code the rule does not read (`%run`, `%pip`, `%%perl`) and a notebook whose
+    kernel is not Python are reported as inconclusive, never silently skipped: an
+    un-analyzable cell is not a proven-clean one.
     """
 
     meta = RuleMeta(
@@ -154,10 +168,16 @@ class NotebookPayloadRule(ArtifactRule):
         if not isinstance(cells, list):
             yield self._unscanned(path, "the notebook declares no list of cells", ctx)
             return
+        foreign = next((name for name in _languages(doc) if not _is_python(name)), None)
+        if foreign is not None:
+            reason = f"its kernel language is {foreign}, which this rule does not read"
+            yield self._unscanned(path, reason, ctx)
+            return
+        scan = _NotebookScan(path, ctx)
         for index, cell in enumerate(cells):
             source = _cell_source(cell)
             if source is not None:
-                yield from self._scan_cell(path, index, source)
+                yield from self._scan_cell(scan, index, read_cell(source, scan.state))
 
     def _unscanned(self, path: Path, reason: str, ctx: RuleContext) -> Finding:
         """Say the notebook was not examined, rather than returning as if it were clean."""
@@ -174,29 +194,80 @@ class NotebookPayloadRule(ArtifactRule):
             verdict=unscanned_verdict("the notebook could not be read, so nothing was cleared"),
         )
 
-    def _scan_cell(self, path: Path, index: int, source: str) -> Iterator[Finding]:
-        python, shell = _split_shell_and_python(source)
-        for line in shell:
-            if _PIPE_TO_SHELL.search(line):
+    def _scan_cell(
+        self, scan: _NotebookScan, index: int, cell: CellReading, depth: int = 0
+    ) -> Iterator[Finding]:
+        path = scan.path
+        scan.state.bound |= cell.bound
+        for line in cell.shell:
+            if PIPE_TO_SHELL.search(line):
                 yield self._finding(
                     path, index, Severity.HIGH, "shell escape pipes a download into a shell"
                 )
+        for label in dict.fromkeys(cell.unread):
+            yield self._unread(scan, index, label)
+        tree = yield from self._parse(scan, index, cell)
+        if tree is None:
+            return
+        bind_names(tree, scan.state)
+        # A notebook cell is source without a file of its own, so it is wrapped in
+        # the same index the `.py` rules use — one walk, and `code_sinks` needs no
+        # second shape to understand.
+        for _lineno, why, lead in code_sinks(PythonSource(path, cell.python, tree)):
+            yield self._finding(
+                path, index, Severity.HIGH, why, lead_verdict(why) if lead else None
+            )
+        for kind, text in ipython_calls(tree, scan.state):
+            if text is None or depth >= _MAX_IPYTHON_NESTING:
+                yield self._unread(scan, index, kind)
+                continue
+            nested = read_shell_command(text) if kind == "shell" else read_cell(text, scan.state)
+            yield from self._scan_cell(scan, index, nested, depth + 1)
+
+    def _unread(self, scan: _NotebookScan, index: int, label: str) -> Finding:
+        """Report something a cell runs that was not read; name it once per notebook."""
+        if label not in scan.unread:
+            scan.unread.add(label)
+            reason = f"{label} runs code or input this rule does not read"
+            scan.ctx.shortfall(unread_component(self.meta.id, scan.path, reason))
+        return self._finding(
+            scan.path,
+            index,
+            Severity.LOW,
+            f"cell runs {label}, which this rule does not read",
+            unscanned_verdict(f"what {label} runs was not read, so it was not cleared"),
+        )
+
+    def _parse(
+        self, scan: _NotebookScan, index: int, cell: CellReading
+    ) -> Generator[Finding, None, ast.Module | None]:
+        """Parse a cell's Python; return its tree, or None after reporting why there is none."""
         try:
-            tree = ast.parse(python)
+            tree = None if cell.too_complex else ast.parse(cell.python)
+        except (MemoryError, RecursionError):
+            tree = None
         except SyntaxError:
             yield self._finding(
-                path,
+                scan.path,
                 index,
                 Severity.LOW,
                 "notebook cell could not be parsed as Python; not analyzed",
                 unscanned_verdict("the cell could not be parsed, so nothing in it was cleared"),
             )
-            return
-        # A notebook cell is source without a file of its own, so it is wrapped in
-        # the same index the `.py` rules use — one walk, and `code_sinks` needs no
-        # second shape to understand.
-        for _lineno, why in code_sinks(PythonSource(path, python, tree)):
-            yield self._finding(path, index, Severity.HIGH, why)
+            return None
+        if tree is None:
+            if "too complex" not in scan.unread:
+                scan.unread.add("too complex")
+                reason = "a cell is too complex for the Python parser"
+                scan.ctx.shortfall(unread_component(self.meta.id, scan.path, reason))
+            yield self._finding(
+                scan.path,
+                index,
+                Severity.LOW,
+                "notebook cell is too complex to parse as Python; not analyzed",
+                unscanned_verdict("the cell could not be parsed, so nothing in it was cleared"),
+            )
+        return tree
 
     def _finding(
         self,

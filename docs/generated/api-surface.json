@@ -8619,6 +8619,24 @@
               "has_default": true,
               "kind": "keyword_only",
               "name": "server_info"
+            },
+            {
+              "annotation": "Sequence[Sequence[Mapping[str, Any]]] | None",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "tool_pages"
+            },
+            {
+              "annotation": "str | None",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "tasks_next_cursor"
+            },
+            {
+              "annotation": "int | None",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "expire_session_on_page"
             }
           ],
           "returns": "None"
