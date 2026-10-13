@@ -1,4 +1,4 @@
-"""Every generated docs page opens with a skip link targeting the main content (#87)."""
+"""Every generated docs page opens with a skip link targeting the main content."""
 
 from __future__ import annotations
 
@@ -34,5 +34,24 @@ def test_main_content_carries_matching_id() -> None:
     assert '<main id="main">' in _render()
 
 
-def test_skip_link_visible_on_focus_css() -> None:
-    assert ".skip:focus" in theme.CSS or ".skip:focus-visible" in theme.CSS
+def _declarations(selector: str) -> dict[str, str]:
+    """Return the declarations of the stylesheet rule whose selector list holds `selector`."""
+    for rule in re.finditer(r"([^{}]+)\{([^{}]*)\}", theme.CSS):
+        if selector in {each.strip() for each in rule.group(1).split(",")}:
+            pairs = (item.split(":", 1) for item in rule.group(2).split(";") if ":" in item)
+            return {name.strip(): value.strip() for name, value in pairs}
+    return {}
+
+
+def _vertical_shift(selector: str) -> str:
+    shift = re.fullmatch(r"translateY\((.+)\)", _declarations(selector).get("transform", ""))
+    assert shift is not None, f"{selector} sets no vertical transform"
+    return shift.group(1)
+
+
+def test_the_skip_link_is_moved_out_of_view_until_it_has_focus() -> None:
+    hidden = _declarations(".skip")
+    assert hidden.get("position") == "absolute"
+    assert hidden.get("top") == "0"
+    assert _vertical_shift(".skip").startswith("-")
+    assert not _vertical_shift(".skip:focus").startswith("-")
