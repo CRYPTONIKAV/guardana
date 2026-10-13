@@ -1,7 +1,7 @@
 header:
   schema-version: 2.2.0
-  last-updated: '2026-10-10'
-  last-reviewed: '2026-10-10'
+  last-updated: '2026-10-12'
+  last-reviewed: '2026-10-12'
   url: https://raw.githubusercontent.com/guardana/guardana/main/security-insights.yml
   comment: |
     Single-repository file: project and repository sections in one document.
@@ -11,13 +11,16 @@ header:
 
 project:
   name: Guardana
-  homepage: https://github.com/guardana/guardana
+  homepage: https://guardana.dev
   administrators:
-    - name: Guardana maintainers
-      email: contact@guardana.dev
+    - name: Konrad Karauda
+      primary: true
+      social: https://github.com/karauda
   documentation:
     code-of-conduct: https://github.com/guardana/guardana/blob/main/CODE_OF_CONDUCT.md
     release-process: https://github.com/guardana/guardana/blob/main/.github/workflows/release.yml
+    signature-verification: https://github.com/guardana/guardana/blob/main/SECURITY.md#what-a-release-publishes-and-how-to-check-it-yourself
+    support-policy: https://github.com/guardana/guardana/blob/main/SECURITY.md#supported-versions
   repositories:
     - name: guardana
       url: https://github.com/guardana/guardana
@@ -49,7 +52,7 @@ repository:
   documentation:
     contributing-guide: https://github.com/guardana/guardana/blob/main/CONTRIBUTING.md
     review-policy: https://github.com/guardana/guardana/blob/main/CONTRIBUTING.md#commits-and-pull-requests
-    governance: https://github.com/guardana/guardana/blob/main/docs/index.md#governance
+    governance: https://github.com/guardana/guardana/blob/main/CONTRIBUTING.md#commits-and-pull-requests
     security-policy: https://github.com/guardana/guardana/blob/main/SECURITY.md
   license:
     url: https://github.com/guardana/guardana/blob/main/LICENSE
@@ -60,20 +63,21 @@ repository:
     attestations:
       - name: Distribution SBOM
         predicate-uri: https://cyclonedx.org/bom
-        location: https://github.com/guardana/guardana/attestations
+        location: https://github.com/guardana/guardana/releases
         comment: |
-          One CycloneDX 1.5 SBOM per distribution, published with every
-          GitHub Release and verifiable with `gh attestation verify`.
+          One CycloneDX 1.5 SBOM per PyPI distribution, attached to every
+          GitHub Release as guardana-<package>-<version>.cdx.json. The SBOM
+          files themselves are not attested.
       - name: Build provenance
         predicate-uri: https://slsa.dev/provenance/v1
         location: https://github.com/guardana/guardana/attestations
         comment: |
-          Keyless-signed build provenance, verifiable with
-          `gh attestation verify`; answers "was this wheel built from
-          that source, by that workflow".
+          Keyless-signed build provenance for the five packages' wheels and
+          sdists, the reference pack's wheel and sdist, and the two container
+          images, verifiable with `gh attestation verify`.
     distribution-points:
       - uri: https://github.com/guardana/guardana/releases
-        comment: GitHub Releases (wheels, SBOMs, attestations).
+        comment: GitHub Releases (SBOMs and the reference pack's wheel and sdist).
       - uri: pkg:pypi/guardana-core
         comment: PyPI distribution (engine).
       - uri: pkg:pypi/guardana-rules
