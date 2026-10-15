@@ -12,13 +12,14 @@ from guardana.core.output import RendererSpec, ReporterSpec
 
 from guardana_reference_pack.controls import CONTROLS
 from guardana_reference_pack.evaluator import MarkerEvaluator
+from guardana_reference_pack.hooks_demo import MarkerHookRule
 from guardana_reference_pack.target import ReferenceRequirementsTarget
 from guardana_reference_pack.unpinned import UnpinnedRequirementRule
 
 
 def provide_rules() -> list[Rule]:
-    """Entry point target for `guardana.rules`: the Python rule and every YAML rule."""
-    return [UnpinnedRequirementRule(), *_yaml_rules()]
+    """Entry point target for `guardana.rules`: the Python rules and every YAML rule."""
+    return [UnpinnedRequirementRule(), MarkerHookRule(), *_yaml_rules()]
 
 
 def provide_evaluators() -> list[Evaluator]:

@@ -44,7 +44,7 @@ def test_rule_test_proves_every_reference_rule() -> None:
     result = guardana("rule", "test", "reference.*", *ADMIT)
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "2 rule(s); 6 fixture(s) passed, 0 failed, 0 could not run." in result.stdout
+    assert "3 rule(s); 9 fixture(s) passed, 0 failed, 0 could not run." in result.stdout
     assert "0 rule(s) not fully sampled" in result.stdout
 
 
