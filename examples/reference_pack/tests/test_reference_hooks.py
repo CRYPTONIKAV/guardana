@@ -16,9 +16,7 @@ from guardana_reference_pack.hooks_demo import MarkerHookRule
 def test_a_target_with_no_text_files_has_nothing_to_check() -> None:
     target = files_target({"app.py": "print('hello')\n"})
 
-    assert (
-        MarkerHookRule().not_applicable_to(target) == "target lists no .txt files"
-    )
+    assert MarkerHookRule().not_applicable_to(target) == "target lists no .txt files"
 
 
 def test_a_target_with_text_files_applies_the_rule() -> None:
